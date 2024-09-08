@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15...3.27)
 project(fcpw)
 
-option(FCPW_USE_ENOKI "Build enoki" ON)
+option(FCPW_USE_ENOKI "Build enoki" OFF)
 option(FCPW_USE_EIGHT_WIDE_BRANCHING "Use 8 wide branching (default 4)" OFF)
 option(FCPW_ENABLE_GPU_SUPPORT "Enable GPU support" OFF)
 option(FCPW_BUILD_BINDINGS "Build bindings" OFF)
@@ -108,9 +108,11 @@ endif()
 
 ################################################################################
 # build library
+find_package(Eigen3 CONFIG REQUIRED)
 add_library(${PROJECT_NAME} INTERFACE)
-target_include_directories(${PROJECT_NAME} INTERFACE $<BUILD_INTERFACE:${${PROJECT_NAME}_SOURCE_DIR}/include>)
-target_compile_features(${PROJECT_NAME} INTERFACE cxx_std_17)
+target_include_directories(${PROJECT_NAME} INTERFACE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
+target_link_libraries(${PROJECT_NAME} INTERFACE Eigen3::Eigen)
+target_compile_features(${PROJECT_NAME} INTERFACE $<BUILD_INTERFACE:cxx_std_17>)
 
 if(FCPW_USE_ENOKI)
     target_compile_definitions(${PROJECT_NAME} INTERFACE -DFCPW_USE_ENOKI)
