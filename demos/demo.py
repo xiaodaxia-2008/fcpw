@@ -26,17 +26,17 @@ def load_obj(obj_file_path):
                 index = [int(idx.split('/')[0]) - 1 for idx in line.strip().split()[1:]]
                 indices.append(np.array(index, dtype=np.int32, order='C'))
 
-    return positions, indices
+    return np.array(positions), np.array(indices)
 
 def load_fcpw_scene(positions, indices, build_vectorized_cpu_bvh):
     # load positions and indices
-    scene = fcpw.scene_3D()
+    scene = fcpw.Scene3D()
     scene.set_object_count(1)
     scene.set_object_vertices(positions, 0)
     scene.set_object_triangles(indices, 0)
 
     # build scene on CPU
-    aggregate_type = fcpw.aggregate_type.bvh_surface_area
+    aggregate_type = fcpw.AggregateType.Bvh_SurfaceArea
     print_stats = False
     reduce_memory_footprint = False
     scene.build(aggregate_type, build_vectorized_cpu_bvh,
@@ -45,33 +45,24 @@ def load_fcpw_scene(positions, indices, build_vectorized_cpu_bvh):
     return scene
 
 def perform_closest_point_queries(scene, query_points):
-    # initialize bounding spheres
-    bounding_spheres = fcpw.bounding_sphere_3D_list()
-    for q in query_points:
-        bounding_spheres.append(fcpw.bounding_sphere_3D(q, np.inf))
-
     # perform cpqs
-    interactions = fcpw.interaction_3D_list()
-    scene.find_closest_points(bounding_spheres, interactions)
+    squared_max_radii = np.inf * np.ones(len(query_points), dtype=np.float32)
+    interactions = fcpw.Interaction3DList()
+    scene.find_closest_points(query_points, squared_max_radii, interactions)
 
-    # extract closest points
-    closest_points = np.array([i.p for i in interactions])
+    # extract closest points using fast bulk extraction
+    closest_points = interactions.get_positions()  # shape: (n, 3)
 
     return closest_points
 
 def perform_gpu_closest_point_queries(gpu_scene, query_points):
-    # initialize bounding spheres
-    bounding_spheres = fcpw.gpu_bounding_sphere_list()
-    for q in query_points:
-        gpu_query_point = fcpw.float_3D(q[0], q[1], q[2])
-        bounding_spheres.append(fcpw.gpu_bounding_sphere(gpu_query_point, np.inf))
-
     # perform cpqs on GPU
-    interactions = fcpw.gpu_interaction_list()
-    gpu_scene.find_closest_points(bounding_spheres, interactions)
+    squared_max_radii = np.inf * np.ones(len(query_points), dtype=np.float32)
+    interactions = fcpw.GPUInteractionList()
+    gpu_scene.find_closest_points(query_points, squared_max_radii, interactions)
 
-    # extract closest points
-    closest_points = np.array([np.array([i.p.x, i.p.y, i.p.z], dtype=np.float32, order='C') for i in interactions])
+    # extract closest points using fast bulk extraction
+    closest_points = interactions.get_positions()  # shape: (n, 3)
 
     return closest_points
 
@@ -102,7 +93,7 @@ def visualize(scene, positions, indices, query_points, use_gpu):
     ps.set_ground_plane_mode("none")
 
     # register mesh and callback
-    ps.register_surface_mesh("mesh", np.array(positions), np.array(indices))
+    ps.register_surface_mesh("mesh", positions, indices)
     gui_callback_no_args = lambda: gui_callback(scene, query_points, use_gpu)
     ps.set_user_callback(gui_callback_no_args)
 
@@ -113,6 +104,7 @@ def main():
     # parse arguments
     parser = argparse.ArgumentParser(description="fcpw demo")
     parser.add_argument("--use_gpu", action="store_true", help="use GPU")
+    parser.add_argument("--device_backend", type=str, default="default", choices=["default", "cuda", "vulkan", "d3d12"], help="GPU backend")
     args = parser.parse_args()
 
     # load obj file
@@ -131,8 +123,8 @@ def main():
         # transfer scene to GPU
         fcpw_directory_path = str(Path.cwd().parent)
         print_stats = False
-        gpu_scene = fcpw.gpu_scene_3D(fcpw_directory_path, print_stats)
-        gpu_scene.transfer_to_gpu(scene)
+        gpu_scene = fcpw.GPUScene3D(fcpw_directory_path, print_stats)
+        gpu_scene.transfer_to_gpu(scene, args.device_backend)
 
         # visualize scene
         visualize(gpu_scene, positions, indices, query_points, True)

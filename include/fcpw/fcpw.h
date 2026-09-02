@@ -22,12 +22,15 @@ public:
     void setObjectCount(int nObjects);
 
     // sets the vertex positions for an object
+    void setObjectVertices(const Eigen::MatrixXf& positions, int objectIndex);
     void setObjectVertices(const std::vector<Vector<DIM>>& positions, int objectIndex);
 
     // sets the vertex indices of line segments for an object
+    void setObjectLineSegments(const Eigen::MatrixXi& indices, int objectIndex);
     void setObjectLineSegments(const std::vector<Vector2i>& indices, int objectIndex);
 
     // sets the vertex indices of triangles for an object
+    void setObjectTriangles(const Eigen::MatrixXi& indices, int objectIndex);
     void setObjectTriangles(const std::vector<Vector3i>& indices, int objectIndex);
 
     /////////////////////////////////////////////////////////////////////////////////////////////
@@ -62,7 +65,8 @@ public:
     /////////////////////////////////////////////////////////////////////////////////////////////
     // API to specify instance transforms and csg tree
 
-    // sets the instance transforms for an object
+    // sets the instance transforms for an object; transforms must use uniform scaling
+    // (rotation, reflection, and translation are supported)
     void setObjectInstanceTransforms(const std::vector<Transform<DIM>>& transforms, int objectIndex);
 
     // sets the data for a node in the csg tree; NOTE: the root node of the csg tree must have index 0
@@ -108,6 +112,11 @@ public:
     // intersects the scene with the given ray and returns whether there is a hit;
     // if checkForOcclusion is enabled, the interaction is not populated
     bool intersect(Ray<DIM>& r, Interaction<DIM>& i, bool checkForOcclusion=false) const;
+
+    // intersects the scene with the given ray and returns whether there is a hit;
+    // this method uses a more accurate but slower intersection test for 3D triangle meshes
+    // than the one above; for 2D line segment meshes, the two methods are equivalent
+    bool intersectRobust(Ray<DIM>& r, Interaction<DIM>& i) const;
 
     // intersects the scene with the given ray and returns the number of hits;
     // by default, returns the closest interaction if it exists;
@@ -162,38 +171,73 @@ public:
     // using Intel TBB can give up to a 2x speedup if applied directly to the query API above
 
     // intersects the scene with the given rays, returning the closest interaction if it exists.
+    void intersect(const Eigen::MatrixXf& rayOrigins,
+                   const Eigen::MatrixXf& rayDirections,
+                   const Eigen::VectorXf& rayDistanceBounds,
+                   std::vector<Interaction<DIM>>& interactions,
+                   bool checkForOcclusion=false) const;
     void intersect(std::vector<Ray<DIM>>& rays,
                    std::vector<Interaction<DIM>>& interactions,
                    bool checkForOcclusion=false) const;
+
+    // intersects the scene with the given rays, returning the closest interaction if it exists;
+    // this method uses a more accurate but slower intersection test for 3D triangle meshes
+    // than the one above; for 2D line segment meshes, the two methods are equivalent
+    void intersectRobust(const Eigen::MatrixXf& rayOrigins,
+                         const Eigen::MatrixXf& rayDirections,
+                         const Eigen::VectorXf& rayDistanceBounds,
+                         std::vector<Interaction<DIM>>& interactions) const;
+    void intersectRobust(std::vector<Ray<DIM>>& rays,
+                         std::vector<Interaction<DIM>>& interactions) const;
 
     // intersects the scene with the given spheres, randomly selecting one geometric primitive
     // contained inside each sphere and sampling a random point on that primitive (written to 
     // Interaction<DIM>::p) using the random numbers randNums[DIM]; the selection pdf value is
     // written to Interaction<DIM>::d along with the primitive index
+    void intersect(const Eigen::MatrixXf& sphereCenters,
+                   const Eigen::VectorXf& sphereSquaredRadii,
+                   std::vector<Interaction<DIM>>& interactions,
+                   const Eigen::MatrixXf& randNums,
+                   const std::function<float(float)>& branchTraversalWeight={}) const;
     void intersect(const std::vector<BoundingSphere<DIM>>& boundingSpheres,
                    std::vector<Interaction<DIM>>& interactions,
                    const std::vector<Vector<DIM>>& randNums,
                    const std::function<float(float)>& branchTraversalWeight={}) const;
 
     // checks whether points are contained inside a scene; NOTE: the scene must be watertight
+    void contains(const Eigen::MatrixXf& points,
+                  Eigen::VectorXi& result) const;
     void contains(const std::vector<Vector<DIM>>& points,
                   std::vector<uint32_t>& result) const;
 
     // checks whether there is a line of sight between between two sets of points in the scene
+    void hasLineOfSight(const Eigen::MatrixXf& pointsI,
+                        const Eigen::MatrixXf& pointsJ,
+                        Eigen::VectorXi& result) const;
     void hasLineOfSight(const std::vector<Vector<DIM>>& pointsI,
                         const std::vector<Vector<DIM>>& pointsJ,
                         std::vector<uint32_t>& result) const;
 
-    // finds the closest points in the scene to the given query points, encoded as bounding spheres.
-    // The radius of each bounding sphere specifies the conservative radius guess around the query
-    // point inside which the search is performed.
+    // finds the closest points in the scene to the given query points. The max radius specifies
+    // a conservative radius guess around the query point inside which the search is performed.
+    void findClosestPoints(const Eigen::MatrixXf& queryPoints,
+                           const Eigen::VectorXf& squaredMaxRadii,
+                           std::vector<Interaction<DIM>>& interactions,
+                           bool recordNormal=false) const;
     void findClosestPoints(std::vector<BoundingSphere<DIM>>& boundingSpheres,
                            std::vector<Interaction<DIM>>& interactions,
                            bool recordNormal=false) const;
 
-    // finds the closest points on the visibility silhouette in the scene to the given query points,
-    // encoded as bounding spheres. Optionally specify a minimum radius to stop the closest silhouette
+    // finds the closest points on the visibility silhouette in the scene to the given query points.
+    // The max radius specifies a conservative radius guess around the query point inside which the
+    // search is performed. Optionally specify a minimum radius to stop the closest silhouette
     // search, as well as a precision parameter to help classify silhouettes.
+    void findClosestSilhouettePoints(const Eigen::MatrixXf& queryPoints,
+                                     const Eigen::VectorXf& squaredMaxRadii,
+                                     std::vector<Interaction<DIM>>& interactions,
+                                     const Eigen::VectorXi& flipNormalOrientation,
+                                     float squaredMinRadius=0.0f, float precision=1e-3f,
+                                     bool recordNormal=false) const;
     void findClosestSilhouettePoints(std::vector<BoundingSphere<DIM>>& boundingSpheres,
                                      std::vector<Interaction<DIM>>& interactions,
                                      const std::vector<uint32_t>& flipNormalOrientation,

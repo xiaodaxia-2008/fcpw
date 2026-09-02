@@ -38,9 +38,10 @@
 build/
 build_debug/
 .vscode/
+.venv/
 
 # External deps
 deps/polyscope
-deps/tbb
 deps/slang
 deps/nanobind
+tests/deps/tbb

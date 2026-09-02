@@ -15,7 +15,7 @@ if(FCPW_BUILD_BINDINGS)
     else()
         set(DEV_MODULE Development.Module)
     endif()
-    find_package(Python 3.8
+    find_package(Python 3.9
         REQUIRED COMPONENTS Interpreter ${DEV_MODULE}
         OPTIONAL_COMPONENTS Development.SABIModule)
 endif()
@@ -36,72 +36,38 @@ endif()
 get_directory_property(hasParent PARENT_DIRECTORY)
 
 if(hasParent)
-    set(FCPW_EIGEN_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/eigen-git-mirror PARENT_SCOPE)
+    set(FCPW_EIGEN_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/eigen PARENT_SCOPE)
 else()
-    set(FCPW_EIGEN_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/eigen-git-mirror)
+    set(FCPW_EIGEN_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/eigen)
 endif()
+list(APPEND FCPW_DEPS_INCLUDES ${FCPW_EIGEN_INCLUDES})
 
 if(FCPW_ENABLE_GPU_SUPPORT)
+    set(SLANG_RHI_INSTALL             OFF CACHE BOOL " " FORCE)
+    set(SLANG_RHI_ENABLE_WGPU         OFF CACHE BOOL "Disable WebGPU" FORCE)
+    set(SLANG_RHI_FETCH_SLANG_VERSION "2026.16.1" CACHE STRING "Slang version to fetch")
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/deps/slang-rhi)
+
     if(hasParent)
-        set(FCPW_SLANG_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/slang/include PARENT_SCOPE)
+        set(FCPW_SLANG_RHI_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/slang-rhi/include PARENT_SCOPE)
+        set(FCPW_SLANG_RHI_LIBRARY slang-rhi PARENT_SCOPE)
     else()
-        set(FCPW_SLANG_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/slang/include)
+        set(FCPW_SLANG_RHI_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/slang-rhi/include)
+        set(FCPW_SLANG_RHI_LIBRARY slang-rhi)
     endif()
-
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        message(STATUS "Operating system: ${CMAKE_SYSTEM_NAME}")
-    else()
-        # unfortunately macOS is not currently officially supported by gfx
-        message(FATAL_ERROR "Unsupported operating system: ${CMAKE_SYSTEM_NAME}")
-    endif()
-
-    # find the .lib/.so files
-    set(SLANG_LIBRARY_PATH ${CMAKE_CURRENT_SOURCE_DIR}/deps/slang/lib)
-    find_library(FCPW_SLANG_LIBRARY NAMES slang PATHS ${SLANG_LIBRARY_PATH})
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        find_library(FCPW_SLANG_GLSLANG_LIBRARY NAMES slang-glslang PATHS ${SLANG_LIBRARY_PATH})
-    else()
-        set(FCPW_SLANG_GLSLANG_LIBRARY "")
-    endif()
-    find_library(FCPW_GFX_LIBRARY NAMES gfx PATHS ${SLANG_LIBRARY_PATH})
-
-    # find the corresponding .dll files
-    if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        set(SLANG_BINARY_PATH ${CMAKE_CURRENT_SOURCE_DIR}/deps/slang/bin)
-        find_file(FCPW_SLANG_BINARY NAMES slang.dll PATHS ${SLANG_BINARY_PATH})
-        find_file(FCPW_SLANG_GLSLANG_BINARY NAMES slang-glslang.dll PATHS ${SLANG_BINARY_PATH})
-        find_file(FCPW_GFX_BINARY NAMES gfx.dll PATHS ${SLANG_BINARY_PATH})
-    endif()
-
-    message(STATUS "SLANG LIBRARY: " ${FCPW_SLANG_LIBRARY})
-    message(STATUS "SLANG GLSLANG LIBRARY: " ${FCPW_SLANG_GLSLANG_LIBRARY})
-    message(STATUS "GFX LIBRARY: " ${FCPW_GFX_LIBRARY})
-endif()
-
-if(FCPW_BUILD_TESTS)
-    set(TBB_BUILD_SHARED          ON  CACHE BOOL " " FORCE)
-    set(TBB_BUILD_STATIC          OFF CACHE BOOL " " FORCE)
-    set(TBB_BUILD_TESTS           OFF CACHE BOOL " " FORCE)
-    set(TBB_BUILD_TBBMALLOC       OFF CACHE BOOL " " FORCE)
-    set(TBB_BUILD_TBBMALLOC_PROXY OFF CACHE BOOL " " FORCE)
-    add_subdirectory(deps/tbb)
-    set_property(TARGET tbb tbb_def_files PROPERTY FOLDER "dependencies")
-    if(hasParent)
-        set(FCPW_TESTS_TBB_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/tbb/include PARENT_SCOPE)
-    else()
-        set(FCPW_TESTS_TBB_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/tbb/include)
-    endif()
+    list(APPEND FCPW_DEPS_INCLUDES ${FCPW_SLANG_RHI_INCLUDES})
 endif()
 
 if(FCPW_USE_ENOKI)
-    add_subdirectory(deps/enoki)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/deps/enoki)
     if(hasParent)
         set(FCPW_ENOKI_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/enoki/include PARENT_SCOPE)
     else()
         set(FCPW_ENOKI_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/enoki/include)
     endif()
+    list(APPEND FCPW_DEPS_INCLUDES ${FCPW_ENOKI_INCLUDES})
 
-    # Update the compilation flags
+    # update the compilation flags
     enoki_set_compile_flags()
     enoki_set_native_flags()
 endif()
@@ -139,10 +105,15 @@ if(FCPW_USE_ENOKI)
     endif()
 endif()
 
+if(FCPW_ENABLE_GPU_SUPPORT)
+    target_compile_definitions(${PROJECT_NAME} INTERFACE -DFCPW_USE_GPU)
+    target_link_libraries(${PROJECT_NAME} INTERFACE ${FCPW_SLANG_RHI_LIBRARY})
+endif()
+
 ################################################################################
 # build Python bindings
 if(FCPW_BUILD_BINDINGS)
-    add_subdirectory(deps/nanobind)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/deps/nanobind)
     add_subdirectory(python)
 endif()
 
@@ -150,7 +121,7 @@ endif()
 # build demo and tests
 if(FCPW_BUILD_DEMO OR FCPW_BUILD_TESTS)
     set(FCPW_ARGS_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/polyscope/deps/args)
-    add_subdirectory(deps/polyscope)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/deps/polyscope)
 endif()
 
 if(FCPW_BUILD_DEMO)

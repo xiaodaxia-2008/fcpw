@@ -113,6 +113,36 @@ struct BoundingBox {
         return true;
     }
 
+    // checks for robust ray intersection
+    bool intersectRobust(const Ray<DIM>& r, const RobustIntersectionData<DIM>& rid,
+                         float& tMin, float& tMax) const {
+        if constexpr (DIM == 3) {
+            // robust ray box intersection;
+            // source: Woop, Benthin, Wald. Watertight Ray/Triangle Intersection. JCGT 2013.
+            float boxBounds[6] = { pMin[0], pMin[1], pMin[2],
+                                   pMax[0], pMax[1], pMax[2] };
+            Vector3 pMinPerm{boxBounds[rid.nearX],
+                             boxBounds[rid.nearY],
+                             boxBounds[rid.nearZ]};
+            Vector3 pMaxPerm{boxBounds[rid.farX],
+                             boxBounds[rid.farY],
+                             boxBounds[rid.farZ]};
+            Vector3 tNear = (pMinPerm - rid.oNear).cwiseProduct(rid.invDNear);
+            Vector3 tFar = (pMaxPerm - rid.oFar).cwiseProduct(rid.invDFar);
+            float tNearMax = std::max(0.0f, tNear.maxCoeff());
+            float tFarMin = std::min(r.tMax, tFar.minCoeff());
+            if (tNearMax > tFarMin) return false;
+
+            tMin = tNearMax;
+            tMax = tFarMin;
+            return true;
+
+        } else {
+            // fallback to regular intersection
+            return intersect(r, tMin, tMax);
+        }
+    }
+
     // checks whether bounding box is valid
     bool isValid() const {
         return (pMax.array() >= pMin.array()).all();
@@ -196,7 +226,7 @@ inline void computeOrthonormalBasis(const Vector3& n, Vector3& b1, Vector3& b2)
 }
 
 template<size_t DIM>
-inline float projectToPlane(const Vector<DIM>& n, const Vector<DIM>& e)
+float projectToPlane(const Vector<DIM>& n, const Vector<DIM>& e)
 {
     std::cerr << "projectToPlane(): DIM: " << DIM << " not supported" << std::endl;
     exit(EXIT_FAILURE);
@@ -238,7 +268,7 @@ struct BoundingCone {
                  axis(axis_), halfAngle(halfAngle_), radius(radius_) {}
 
     // check for overlap between this cone and the "view" cone defined by the given
-    // point and bounding box; the two cones overlap when there exist two vectors,
+    // point o and bounding box b; the two cones overlap when there exist two vectors,
     // one in each cone, that are orthogonal to each other.
     // NOTE: Tighter view cone construction is available in Falcor, but doesn't seem to help:
     // https://github.com/NVIDIAGameWorks/Falcor/blob/master/Source/Falcor/Utils/Geometry/GeometryHelpers.slang
@@ -272,7 +302,7 @@ struct BoundingCone {
             return halfAngleSum >= M_PI_2 ? true : inRange(M_PI_2, minAngleRange, maxAngleRange);
         }
 
-        // the view cone origin lies inside this cone's bounding sphere, so check if
+        // the view cone origin lies inside the box's bounding sphere, so check if
         // the plane defined by the view cone axis intersects the box; if it does, then
         // there's overlap since the view cone has a halfAngle greater than 90 degrees
         Vector<DIM> e = b.pMax - c;
@@ -302,11 +332,11 @@ struct BoundingCone {
 };
 
 template<size_t DIM>
-inline BoundingCone<DIM> mergeBoundingCones(const BoundingCone<DIM>& coneA,
-                                            const BoundingCone<DIM>& coneB,
-                                            const Vector<DIM>& originA,
-                                            const Vector<DIM>& originB,
-                                            const Vector<DIM>& newOrigin)
+BoundingCone<DIM> mergeBoundingCones(const BoundingCone<DIM>& coneA,
+                                     const BoundingCone<DIM>& coneB,
+                                     const Vector<DIM>& originA,
+                                     const Vector<DIM>& originB,
+                                     const Vector<DIM>& newOrigin)
 {
     BoundingCone<DIM> cone;
     if (coneA.isValid() && coneB.isValid()) {

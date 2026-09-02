@@ -1,4 +1,4 @@
-implementing bvh;
+implementing fcpw;
 __include ray;
 __include math_constants;
 
@@ -34,7 +34,7 @@ public struct BoundingBox
     }
 
     // returns box centroid
-    public float3 centroid()
+    public float3 getCentroid()
     {
         return 0.5 * (pMin + pMax);
     }
@@ -72,6 +72,24 @@ public struct BoundingBox
         float3 t1 = (pMax - r.o) * r.dInv;
         float3 tNear = min(t0, t1);
         float3 tFar = max(t0, t1);
+
+        // Handle degenerate slabs where the ray direction component is zero
+        // (e.g., 2D rays where d.z = 0). When dInv = INF and the slab extent
+        // contains the origin (pMin = pMax = o = 0), the product 0 * INF has
+        // implementation-defined results (NaN, 0, or INF depending on GPU).
+        // Fix: detect parallel slabs using r.d, and either:
+        //   - return false if the ray misses the slab (origin outside)
+        //   - use unconstrained range if the ray hits the slab (origin inside)
+        bool3 parallel = (r.d == float3(0.0));
+        bool3 withinSlab = (r.o >= pMin) & (r.o <= pMax);
+        if (any(parallel & !withinSlab))
+        {
+            tMin = FLT_MAX;
+            tMax = FLT_MAX;
+            return false;
+        }
+        tNear = select(parallel, float3(-FLT_MAX), tNear);
+        tFar = select(parallel, float3(FLT_MAX), tFar);
 
         float tNearMax = max(0.0, max(tNear.x, max(tNear.y, tNear.z)));
         float tFarMin = min(r.tMax, min(tFar.x, min(tFar.y, tFar.z)));
@@ -154,8 +172,13 @@ public struct BoundingCone
     // check for overlap between this cone and the "view" cone defined by the given
     // point o and bounding box b; the two cones overlap when there exist two vectors,
     // one in each cone, that are orthogonal to each other.
-    public bool overlap(float3 o, BoundingBox b, float distToBox)
+    public bool overlap(float3 o, BoundingBox b, float distToBox,
+                        out float minAngleRange, out float maxAngleRange)
     {
+        // initialize angle bounds
+        minAngleRange = 0.0;
+        maxAngleRange = M_PI_2;
+
         // there's overlap if this cone's halfAngle is greater than 90 degrees, or
         // if the box contains the view cone origin (since the view cone is invalid)
         if (halfAngle >= M_PI_2 || distToBox < FLT_EPSILON)
@@ -164,7 +187,7 @@ public struct BoundingCone
         }
 
         // compute the view cone axis
-        float3 c = b.centroid();
+        float3 c = b.getCentroid();
         float3 viewConeAxis = c - o;
         float l = length(viewConeAxis);
         viewConeAxis /= l;
@@ -182,7 +205,9 @@ public struct BoundingCone
         {
             float viewConeHalfAngle = asin(radius / l);
             float halfAngleSum = halfAngle + viewConeHalfAngle;
-            return halfAngleSum >= M_PI_2 ? true : inRange(M_PI_2, dAxisAngle - halfAngleSum, dAxisAngle + halfAngleSum);
+            minAngleRange = dAxisAngle - halfAngleSum;
+            maxAngleRange = dAxisAngle + halfAngleSum;
+            return halfAngleSum >= M_PI_2 ? true : inRange(M_PI_2, minAngleRange, maxAngleRange);
         }
 
         // the view cone origin lies inside the box's bounding sphere, so check if
@@ -201,7 +226,9 @@ public struct BoundingCone
         d = projectToPlane(viewConeAxis, e);
         float viewConeHalfAngle = atan2(d, s);
         float halfAngleSum = halfAngle + viewConeHalfAngle;
-        return halfAngleSum >= M_PI_2 ? true : inRange(M_PI_2, dAxisAngle - halfAngleSum, dAxisAngle + halfAngleSum);
+        minAngleRange = dAxisAngle - halfAngleSum;
+        maxAngleRange = dAxisAngle + halfAngleSum;
+        return halfAngleSum >= M_PI_2 ? true : inRange(M_PI_2, minAngleRange, maxAngleRange);
     }
 };
 

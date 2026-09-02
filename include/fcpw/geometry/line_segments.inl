@@ -147,7 +147,7 @@ inline bool LineSegment::intersect(const Ray<2>& r, Interaction<2>& i, bool chec
 
     // return if line segment and ray are parallel
     float dv = r.d[0]*v[1] - r.d[1]*v[0];
-    if (std::fabs(dv) <= epsilon) return 0;
+    if (std::fabs(dv) <= epsilon) return false;
 
     // solve r.o + t*r.d = pa + s*(pb - pa) for t >= 0 && 0 <= s <= 1
     // s = (u x r.d)/(r.d x v)
@@ -171,7 +171,13 @@ inline bool LineSegment::intersect(const Ray<2>& r, Interaction<2>& i, bool chec
         }
     }
 
-    return false;   
+    return false;
+}
+
+inline bool LineSegment::intersectRobust(const Ray<2>& r, const RobustIntersectionData<2>& rid, Interaction<2>& i) const
+{
+    // fallback to regular intersection
+    return intersect(r, i, false);
 }
 
 inline int LineSegment::intersect(const Ray<2>& r, std::vector<Interaction<2>>& is,
@@ -192,8 +198,8 @@ inline int LineSegment::intersect(const Ray<2>& r, std::vector<Interaction<2>>& 
 }
 
 template<size_t DIM>
-inline float findClosestPointLineSegment(const Vector<DIM>& pa, const Vector<DIM>& pb,
-                                         const Vector<DIM>& x, Vector<DIM>& pt, float& t)
+float findClosestPointLineSegment(const Vector<DIM>& pa, const Vector<DIM>& pb,
+                                  const Vector<DIM>& x, Vector<DIM>& pt, float& t)
 {
     Vector<DIM> u = pb - pa;
     Vector<DIM> v = x - pa;

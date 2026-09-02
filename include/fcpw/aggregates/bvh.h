@@ -101,6 +101,11 @@ public:
                            bool checkForOcclusion=false) const;
 
     // intersects with ray, starting the traversal at the specified node in an aggregate
+    bool intersectRobustFromNode(Ray<DIM>& r, Interaction<DIM>& i,
+                                 int nodeStartIndex, int aggregateIndex,
+                                 int& nodesVisited) const;
+
+    // intersects with ray, starting the traversal at the specified node in an aggregate
     // NOTE: interactions are invalid when checkForOcclusion is enabled
     int intersectFromNode(Ray<DIM>& r, std::vector<Interaction<DIM>>& is,
                           int nodeStartIndex, int aggregateIndex, int& nodesVisited,
@@ -170,6 +175,12 @@ protected:
                                        TraversalStack *subtree, float *boxHits,
                                        bool& didHit, int& nodesVisited) const;
 
+    // processes subtree for robust intersection
+    bool processSubtreeForRobustIntersection(const RobustIntersectionData<DIM>& rid,
+                                             Ray<DIM>& r, Interaction<DIM>& i, int nodeStartIndex,
+                                             int aggregateIndex, TraversalStack *subtree,
+                                             float *boxHits, bool& didHit, int& nodesVisited) const;
+
     // processes subtree for intersection
     bool processSubtreeForIntersection(Ray<DIM>& r, std::vector<Interaction<DIM>>& is,
                                        int nodeStartIndex, int aggregateIndex, bool checkForOcclusion,
@@ -210,7 +221,7 @@ protected:
     template<size_t A, typename B, typename C, typename D, typename E, typename F, typename G>
     friend class CPUBvhDataExtractor;
     template<size_t A, typename B, typename C, typename D>
-    friend class CPUBvhRefitDataExtractor;
+    friend class CPUBvhUpdateDataExtractor;
 };
 
 } // namespace fcpw

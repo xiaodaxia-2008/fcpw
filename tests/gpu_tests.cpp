@@ -1,7 +1,7 @@
 #include <fcpw/utilities/scene_loader.h>
 #include <fcpw/fcpw_gpu.h>
-#include "tbb/parallel_for.h"
-#include "tbb/blocked_range.h"
+#include "oneapi/tbb/parallel_for.h"
+#include "oneapi/tbb/blocked_range.h"
 #include <atomic>
 
 #include "polyscope/polyscope.h"
@@ -18,6 +18,7 @@ static bool refitBvh = false;
 static bool vizScene = false;
 static bool plotInteriorPoints = false;
 static bool computeSilhouettes = false;
+static std::string deviceBackend = "default";
 static int nQueries = 1048576;
 
 template<size_t DIM>
@@ -403,7 +404,7 @@ void run()
     // transfer scene to GPU
     std::filesystem::path fpcwDirectoryPath = std::filesystem::current_path().parent_path();
     GPUScene<DIM> gpuScene(fpcwDirectoryPath.string(), true);
-    gpuScene.transferToGPU(scene);
+    gpuScene.transferToGPU(scene, deviceBackend);
 
     // refit GPU BVH
     if (refitBvh) {
@@ -481,6 +482,7 @@ int main(int argc, const char *argv[]) {
     args::Flag vizScene(group, "bool", "visualize scene", {"vizScene"});
     args::Flag plotInteriorPoints(group, "bool", "plot interior points", {"plotInteriorPoints"});
     args::Flag computeSilhouettes(group, "bool", "compute silhouettes", {"computeSilhouettes"});
+    args::ValueFlag<std::string> deviceBackend(parser, "string", "GPU backend: default, cuda, vulkan, d3d12", {"deviceBackend"});
     args::ValueFlag<int> dim(parser, "integer", "scene dimension", {"dim"});
     args::ValueFlag<int> nQueries(parser, "integer", "number of queries", {"nQueries"});
     args::ValueFlag<std::string> lineSegmentFilename(parser, "string", "line segment soup filename", {"lFile"});
@@ -516,6 +518,7 @@ int main(int argc, const char *argv[]) {
     if (vizScene) ::vizScene = args::get(vizScene);
     if (plotInteriorPoints) ::plotInteriorPoints = args::get(plotInteriorPoints);
     if (computeSilhouettes) ::computeSilhouettes = args::get(computeSilhouettes);
+    if (deviceBackend) ::deviceBackend = args::get(deviceBackend);
     if (nQueries) ::nQueries = args::get(nQueries);
     if (lineSegmentFilename) {
         files.emplace_back(std::make_pair(args::get(lineSegmentFilename), LoadingOption::ObjLineSegments));

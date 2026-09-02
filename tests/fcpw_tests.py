@@ -21,63 +21,49 @@ def compute_bounding_box(positions):
 
     return BoundingBox(p_min, p_max)
 
-def split_box_recursive(bounding_box, depth):
-    boxes = []
-    if depth == 0:
-        boxes.append(bounding_box)
-
-    else:
-        split_dim = bounding_box.max_dimension()
-        split_coord = (bounding_box.p_min[split_dim] + bounding_box.p_max[split_dim]) * 0.5
-
-        box_left = BoundingBox(bounding_box.p_min, bounding_box.p_max)
-        box_left.p_max[split_dim] = split_coord
-        boxes_left = split_box_recursive(box_left, depth - 1)
-        boxes.extend(boxes_left)
-
-        box_right = BoundingBox(bounding_box.p_min, bounding_box.p_max)
-        box_right.p_min[split_dim] = split_coord
-        boxes_right = split_box_recursive(box_right, depth - 1)
-        boxes.extend(boxes_right)
-
-    return boxes
-
 def generate_scattered_points_and_rays(n_queries, bounding_box, dim):
     epsilon = 1e-6
-    boxes = split_box_recursive(bounding_box, 6)
-    n_boxes = len(boxes)
-    n_queries_per_box = int(np.ceil(n_queries / n_boxes))
-
-    scattered_points = [None] * n_boxes * n_queries_per_box
-    random_directions = [None] * n_boxes * n_queries_per_box
-    random_squared_radii = [None] * n_boxes * n_queries_per_box
-
-    count = 0
-    for box in boxes:
-        e = box.p_max - box.p_min
-        for _ in range(n_queries_per_box):
-            o = box.p_min + e * np.random.rand(dim)
-            d = np.random.rand(dim) * 2 - 1
-            r2 = 0.1 * np.random.rand() * np.linalg.norm(e)
-            if np.abs(e[dim - 1]) < 5 * epsilon:
-                o[dim - 1] = 0
-                d[dim - 1] = 0
-            d /= np.linalg.norm(d)
-
-            scattered_points[count] = o
-            random_directions[count] = d
-            random_squared_radii[count] = r2
-            count += 1
-
-    scattered_points = scattered_points[:n_queries]
-    random_directions = random_directions[:n_queries]
-    random_squared_radii = random_squared_radii[:n_queries]
+    extents = bounding_box.p_max - bounding_box.p_min
+    scattered_points = bounding_box.p_min + extents * np.random.rand(n_queries, dim)
+    random_directions = np.random.rand(n_queries, dim) * 2 - 1
+    random_squared_radii = 0.1 * np.random.rand(n_queries) * np.linalg.norm(extents)
+    if np.abs(extents[dim - 1]) < 5 * epsilon:
+        scattered_points[:, dim - 1] = 0
+        random_directions[:, dim - 1] = 0
+    random_directions /= np.linalg.norm(random_directions, axis=1)[:, None]
 
     return scattered_points, random_directions, random_squared_radii
 
+def generate_edge_rays(n_queries, positions, indices, centroid):
+    """Generate rays from centroid toward random edge points on the mesh (3D only)."""
+    n_triangles = len(indices)
+    edge_points = []
+
+    for _ in range(n_queries):
+        # pick a random triangle
+        tri_idx = np.random.randint(0, n_triangles)
+        tri = indices[tri_idx]
+
+        # pick a random edge (0, 1, or 2)
+        edge_idx = np.random.randint(0, 3)
+        v0_idx = tri[edge_idx]
+        v1_idx = tri[(edge_idx + 1) % 3]
+
+        # pick a random point on the edge
+        t = np.random.rand()
+        edge_point = (1 - t) * positions[v0_idx] + t * positions[v1_idx]
+        edge_points.append(edge_point)
+
+    edge_points = np.array(edge_points, dtype=np.float32)
+    ray_origins = np.tile(centroid.astype(np.float32), (n_queries, 1))
+    ray_directions = edge_points - ray_origins
+    ray_directions /= np.linalg.norm(ray_directions, axis=1)[:, None]
+
+    return ray_origins, ray_directions
+
 def tag_interior_points(scene, query_points):
     n_queries = len(query_points)
-    is_interior = fcpw.uint32_list()
+    is_interior = fcpw.Uint32List()
     scene.contains(query_points, is_interior)
 
     return is_interior
@@ -86,7 +72,7 @@ def isolate_interior_points(scene, query_points):
     is_interior = tag_interior_points(scene, query_points)
     interior_points = [query_point for query_point, interior in zip(query_points, is_interior) if interior]
 
-    return interior_points
+    return np.array(interior_points)
 
 def load_obj(file_path, dim):
     positions = []
@@ -116,7 +102,7 @@ def load_obj(file_path, dim):
                     index = [int(idx.split('/')[0]) - 1 for idx in line.strip().split()[1:]]
                     indices.append(np.array(index, dtype=np.int32, order='C'))
 
-    return positions, indices
+    return np.array(positions), np.array(indices)
 
 def ignore_silhouette(angle: float, index: int):
     return False # stub
@@ -126,12 +112,12 @@ def load_fcpw_scene(positions, indices, aggregate_type, compute_silhouettes, vec
     scene = None
 
     if dim == 2:
-        scene = fcpw.scene_2D()
+        scene = fcpw.Scene2D()
         scene.set_object_count(1)
         scene.set_object_line_segments(indices, 0)
 
     elif dim == 3:
-        scene = fcpw.scene_3D()
+        scene = fcpw.Scene3D()
         scene.set_object_count(1)
         scene.set_object_triangles(indices, 0)
 
@@ -145,68 +131,30 @@ def load_fcpw_scene(positions, indices, aggregate_type, compute_silhouettes, vec
 
     return scene
 
-def init_gpu_data(n_queries, query_points, random_directions, random_squared_radii,
-                  cpu_rand_nums, cpu_flip_normal_orientation, dim):
+def init_gpu_data(n_queries, dim):
     scene = None
-    ray_list = [None] * n_queries
-    bounding_sphere_list = [None] * n_queries
-    infinite_sphere_list = [None] * n_queries
-    rand_nums = [None] * n_queries
-    flip_normal_orientation = [None] * n_queries
-
     fcpw_directory_path = str(Path.cwd().parent)
     if dim == 2:
-        scene = fcpw.gpu_scene_2D(fcpw_directory_path, True)
+        scene = fcpw.GPUScene2D(fcpw_directory_path, True)
 
     elif dim == 3:
-        scene = fcpw.gpu_scene_3D(fcpw_directory_path, True)
+        scene = fcpw.GPUScene3D(fcpw_directory_path, True)
 
-    for q in range(n_queries):
-        query_point = fcpw.float_3D(query_points[q][0],
-                                    query_points[q][1], 0.0)
-        random_direction = fcpw.float_3D(random_directions[q][0],
-                                         random_directions[q][1], 0.0)
-        rand_num = fcpw.float_3D(cpu_rand_nums[q][0], cpu_rand_nums[q][1], 0.0)
-        if dim == 3:
-            query_point.z = query_points[q][2]
-            random_direction.z = random_directions[q][2]
-            rand_num.z = cpu_rand_nums[q][2]
+    return scene
 
-        ray_list[q] = fcpw.gpu_ray(query_point, random_direction)
-        bounding_sphere_list[q] = fcpw.gpu_bounding_sphere(query_point, random_squared_radii[q])
-        infinite_sphere_list[q] = fcpw.gpu_bounding_sphere(query_point, np.inf)
-        rand_nums[q] = rand_num
-        flip_normal_orientation[q] = 1 if cpu_flip_normal_orientation[q] else 0
-
-    return scene, fcpw.gpu_ray_list(ray_list), fcpw.gpu_bounding_sphere_list(bounding_sphere_list), \
-           fcpw.gpu_bounding_sphere_list(infinite_sphere_list), fcpw.float_3D_list(rand_nums), \
-           fcpw.uint32_list(flip_normal_orientation)
-
-def run_cpu_ray_intersection_queries(scene, ray_origins, ray_directions,
+def run_cpu_ray_intersection_queries(scene, ray_origins, ray_directions, ray_distance_bounds,
                                      dim, run_bundled_queries = True):
     n_queries = len(ray_origins)
     if run_bundled_queries:
-        rays = None
         interactions = None
-
         if dim == 2:
-            rays = fcpw.ray_2D_list()
-            interactions = fcpw.interaction_2D_list()
-
-            for q in range(n_queries):
-                rays.append(fcpw.ray_2D(ray_origins[q], ray_directions[q]))
-                interactions.append(fcpw.interaction_2D())
+            interactions = fcpw.Interaction2DList()
 
         elif dim == 3:
-            rays = fcpw.ray_3D_list()
-            interactions = fcpw.interaction_3D_list()
-
-            for q in range(n_queries):
-                rays.append(fcpw.ray_3D(ray_origins[q], ray_directions[q]))
-                interactions.append(fcpw.interaction_3D())
+            interactions = fcpw.Interaction3DList()
 
         start_time = time.perf_counter()
-        scene.intersect(rays, interactions, False)
+        scene.intersect(ray_origins, ray_directions, ray_distance_bounds, interactions, False)
         end_time = time.perf_counter()
         print(f"{n_queries} ray intersection queries took {end_time - start_time} seconds")
 
@@ -218,18 +166,44 @@ def run_cpu_ray_intersection_queries(scene, ray_origins, ray_directions,
 
         if dim == 2:
             for q in range(n_queries):
-                ray = fcpw.ray_2D(ray_origins[q], ray_directions[q])
-                interactions[q] = fcpw.interaction_2D()
+                ray = fcpw.Ray2D(ray_origins[q], ray_directions[q], ray_distance_bounds[q])
+                interactions[q] = fcpw.Interaction2D()
                 hit = scene.intersect(ray, interactions[q], False)
 
         elif dim == 3:
             for q in range(n_queries):
-                ray = fcpw.ray_3D(ray_origins[q], ray_directions[q])
-                interactions[q] = fcpw.interaction_3D()
+                ray = fcpw.Ray3D(ray_origins[q], ray_directions[q], ray_distance_bounds[q])
+                interactions[q] = fcpw.Interaction3D()
                 hit = scene.intersect(ray, interactions[q], False)
 
         end_time = time.perf_counter()
         print(f"{n_queries} ray intersection queries took {end_time - start_time} seconds")
+
+        return interactions
+
+def run_cpu_robust_ray_intersection_queries(scene, ray_origins, ray_directions, ray_distance_bounds,
+                                            run_bundled_queries = True):
+    n_queries = len(ray_origins)
+    if run_bundled_queries:
+        start_time = time.perf_counter()
+        interactions = fcpw.Interaction3DList()
+        scene.intersect_robust(ray_origins, ray_directions, ray_distance_bounds, interactions)
+        end_time = time.perf_counter()
+        print(f"{n_queries} robust ray intersection queries took {end_time - start_time} seconds")
+
+        return interactions
+
+    else:
+        start_time = time.perf_counter()
+        interactions = [None] * n_queries
+
+        for q in range(n_queries):
+            ray = fcpw.Ray3D(ray_origins[q], ray_directions[q], ray_distance_bounds[q])
+            interactions[q] = fcpw.Interaction3D()
+            hit = scene.intersect_robust(ray, interactions[q])
+
+        end_time = time.perf_counter()
+        print(f"{n_queries} robust ray intersection queries took {end_time - start_time} seconds")
 
         return interactions
 
@@ -240,27 +214,15 @@ def run_cpu_sphere_intersection_queries(scene, sphere_centers, sphere_squared_ra
                                         rand_nums, dim, run_bundled_queries = True):
     n_queries = len(sphere_centers)
     if run_bundled_queries:
-        bounding_spheres = None
         interactions = None
-
         if dim == 2:
-            bounding_spheres = fcpw.bounding_sphere_2D_list()
-            interactions = fcpw.interaction_2D_list()
-
-            for q in range(n_queries):
-                bounding_spheres.append(fcpw.bounding_sphere_2D(sphere_centers[q], sphere_squared_radii[q]))
-                interactions.append(fcpw.interaction_2D())
+            interactions = fcpw.Interaction2DList()
 
         elif dim == 3:
-            bounding_spheres = fcpw.bounding_sphere_3D_list()
-            interactions = fcpw.interaction_3D_list()
-
-            for q in range(n_queries):
-                bounding_spheres.append(fcpw.bounding_sphere_3D(sphere_centers[q], sphere_squared_radii[q]))
-                interactions.append(fcpw.interaction_3D())
+            interactions = fcpw.Interaction3DList()
 
         start_time = time.perf_counter()
-        scene.intersect(bounding_spheres, interactions, rand_nums, None)
+        scene.intersect(sphere_centers, sphere_squared_radii, interactions, rand_nums, None)
         end_time = time.perf_counter()
         print(f"{n_queries} sphere intersection queries took {end_time - start_time} seconds")
 
@@ -272,14 +234,14 @@ def run_cpu_sphere_intersection_queries(scene, sphere_centers, sphere_squared_ra
 
         if dim == 2:
             for q in range(n_queries):
-                sphere = fcpw.bounding_sphere_2D(sphere_centers[q], sphere_squared_radii[q])
-                interactions[q] = fcpw.interaction_2D()
+                sphere = fcpw.BoundingSphere2D(sphere_centers[q], sphere_squared_radii[q])
+                interactions[q] = fcpw.Interaction2D()
                 hits = scene.intersect(sphere, interactions[q], rand_nums[q], None)
 
         elif dim == 3:
             for q in range(n_queries):
-                sphere = fcpw.bounding_sphere_3D(sphere_centers[q], sphere_squared_radii[q])
-                interactions[q] = fcpw.interaction_3D()
+                sphere = fcpw.BoundingSphere3D(sphere_centers[q], sphere_squared_radii[q])
+                interactions[q] = fcpw.Interaction3D()
                 hits = scene.intersect(sphere, interactions[q], rand_nums[q], None)
 
         end_time = time.perf_counter()
@@ -287,30 +249,18 @@ def run_cpu_sphere_intersection_queries(scene, sphere_centers, sphere_squared_ra
 
         return interactions
 
-def run_cpu_closest_point_queries(scene, query_points, dim, run_bundled_queries = True):
+def run_cpu_closest_point_queries(scene, query_points, squared_max_radii, dim, run_bundled_queries = True):
     n_queries = len(query_points)
     if run_bundled_queries:
-        bounding_spheres = None
         interactions = None
-
         if dim == 2:
-            bounding_spheres = fcpw.bounding_sphere_2D_list()
-            interactions = fcpw.interaction_2D_list()
-
-            for q in range(n_queries):
-                bounding_spheres.append(fcpw.bounding_sphere_2D(query_points[q], np.inf))
-                interactions.append(fcpw.interaction_2D())
+            interactions = fcpw.Interaction2DList()
 
         elif dim == 3:
-            bounding_spheres = fcpw.bounding_sphere_3D_list()
-            interactions = fcpw.interaction_3D_list()
-
-            for q in range(n_queries):
-                bounding_spheres.append(fcpw.bounding_sphere_3D(query_points[q], np.inf))
-                interactions.append(fcpw.interaction_3D())
+            interactions = fcpw.Interaction3DList()
 
         start_time = time.perf_counter()
-        scene.find_closest_points(bounding_spheres, interactions)
+        scene.find_closest_points(query_points, squared_max_radii, interactions)
         end_time = time.perf_counter()
         print(f"{n_queries} closest point queries took {end_time - start_time} seconds")
 
@@ -322,47 +272,32 @@ def run_cpu_closest_point_queries(scene, query_points, dim, run_bundled_queries 
 
         if dim == 2:
             for q in range(n_queries):
-                interactions[q] = fcpw.interaction_2D()
-                found = scene.find_closest_point(query_points[q], interactions[q])
+                interactions[q] = fcpw.Interaction2D()
+                found = scene.find_closest_point(query_points[q], interactions[q], squared_max_radii[q])
 
         elif dim == 3:
             for q in range(n_queries):
-                interactions[q] = fcpw.interaction_3D()
-                found = scene.find_closest_point(query_points[q], interactions[q])
+                interactions[q] = fcpw.Interaction3D()
+                found = scene.find_closest_point(query_points[q], interactions[q], squared_max_radii[q])
 
         end_time = time.perf_counter()
         print(f"{n_queries} closest point queries took {end_time - start_time} seconds")
 
         return interactions
 
-def run_cpu_closest_silhouette_point_queries(scene, query_points, flip_normal_orientation,
+def run_cpu_closest_silhouette_point_queries(scene, query_points, squared_max_radii, flip_normal_orientation,
                                              dim, run_bundled_queries = True):
     n_queries = len(query_points)
     if run_bundled_queries:
-        bounding_spheres = None
         interactions = None
-        flip_normal_orientation_list = fcpw.uint32_list()
-
         if dim == 2:
-            bounding_spheres = fcpw.bounding_sphere_2D_list()
-            interactions = fcpw.interaction_2D_list()
-
-            for q in range(n_queries):
-                bounding_spheres.append(fcpw.bounding_sphere_2D(query_points[q], np.inf))
-                interactions.append(fcpw.interaction_2D())
-                flip_normal_orientation_list.append(1 if flip_normal_orientation[q] else 0)
+            interactions = fcpw.Interaction2DList()
 
         elif dim == 3:
-            bounding_spheres = fcpw.bounding_sphere_3D_list()
-            interactions = fcpw.interaction_3D_list()
-
-            for q in range(n_queries):
-                bounding_spheres.append(fcpw.bounding_sphere_3D(query_points[q], np.inf))
-                interactions.append(fcpw.interaction_3D())
-                flip_normal_orientation_list.append(1 if flip_normal_orientation[q] else 0)
+            interactions = fcpw.Interaction3DList()
 
         start_time = time.perf_counter()
-        scene.find_closest_silhouette_points(bounding_spheres, interactions, flip_normal_orientation_list)
+        scene.find_closest_silhouette_points(query_points, squared_max_radii, interactions, flip_normal_orientation)
         end_time = time.perf_counter()
         print(f"{n_queries} closest silhouette point queries took {end_time - start_time} seconds")
 
@@ -374,13 +309,15 @@ def run_cpu_closest_silhouette_point_queries(scene, query_points, flip_normal_or
 
         if dim == 2:
             for q in range(n_queries):
-                interactions[q] = fcpw.interaction_2D()
-                found = scene.find_closest_silhouette_point(query_points[q], interactions[q], flip_normal_orientation[q])
+                interactions[q] = fcpw.Interaction2D()
+                found = scene.find_closest_silhouette_point(query_points[q], interactions[q],
+                                                            flip_normal_orientation[q], squared_max_radii[q])
 
         elif dim == 3:
             for q in range(n_queries):
-                interactions[q] = fcpw.interaction_3D()
-                found = scene.find_closest_silhouette_point(query_points[q], interactions[q], flip_normal_orientation[q])
+                interactions[q] = fcpw.Interaction3D()
+                found = scene.find_closest_silhouette_point(query_points[q], interactions[q],
+                                                            flip_normal_orientation[q], squared_max_radii[q])
 
         end_time = time.perf_counter()
         print(f"{n_queries} closest silhouette point queries took {end_time - start_time} seconds")
@@ -427,156 +364,252 @@ def run_warp_closest_point_queries(mesh: wp.uint64,
 
 def compare_cpu_interactions(cpu_interactions_baseline, cpu_interactions, dim):
     n_queries = len(cpu_interactions)
-    for i in range(n_queries):
-        cpu_interaction_baseline = cpu_interactions_baseline[i]
-        cpu_interaction = cpu_interactions[i]
-        different_indices = (cpu_interaction_baseline.primitive_index == -1 and cpu_interaction.primitive_index != -1) or \
-                            (cpu_interaction_baseline.primitive_index != -1 and cpu_interaction.primitive_index == -1)
 
-        if different_indices:
+    # use bulk extraction for fast comparison (3-10x faster than Python loops)
+    baseline_indices = cpu_interactions_baseline.get_primitive_indices()
+    indices = cpu_interactions.get_primitive_indices()
+
+    # find mismatches: one has valid index (-1 = invalid) and other doesn't
+    different_mask = ((baseline_indices == -1) & (indices != -1)) | \
+                     ((baseline_indices != -1) & (indices == -1))
+
+    if np.any(different_mask):
+        # extract all data at once for mismatched entries
+        baseline_positions = cpu_interactions_baseline.get_positions()
+        baseline_normals = cpu_interactions_baseline.get_normals()
+        baseline_uvs = cpu_interactions_baseline.get_uvs()
+        baseline_distances = cpu_interactions_baseline.get_distances()
+
+        positions = cpu_interactions.get_positions()
+        normals = cpu_interactions.get_normals()
+        uvs = cpu_interactions.get_uvs()
+        distances = cpu_interactions.get_distances()
+
+        # print mismatches
+        mismatch_indices = np.where(different_mask)[0]
+        for i in mismatch_indices:
             print(f"#{i}/{n_queries}")
             if dim == 2:
                 print("CPU Interaction Baseline")
-                print(f"\tp: {cpu_interaction_baseline.p[0]} {cpu_interaction_baseline.p[1]}")
-                print(f"\tn: {cpu_interaction_baseline.n[0]} {cpu_interaction_baseline.n[1]}")
-                print(f"\tuv: {cpu_interaction_baseline.uv[0]}")
-                print(f"\td: {cpu_interaction_baseline.d}")
-                print(f"\tindex: {cpu_interaction_baseline.primitive_index}")
+                print(f"\tp: {baseline_positions[i, 0]} {baseline_positions[i, 1]}")
+                print(f"\tn: {baseline_normals[i, 0]} {baseline_normals[i, 1]}")
+                print(f"\tuv: {baseline_uvs[i, 0]}")
+                print(f"\td: {baseline_distances[i]}")
+                print(f"\tindex: {baseline_indices[i]}")
                 print("CPU Interaction")
-                print(f"\tp: {cpu_interaction.p[0]} {cpu_interaction.p[1]}")
-                print(f"\tn: {cpu_interaction.n[0]} {cpu_interaction.n[1]}")
-                print(f"\tuv: {cpu_interaction.uv[0]}")
-                print(f"\td: {cpu_interaction.d}")
-                print(f"\tindex: {cpu_interaction.primitive_index}")
+                print(f"\tp: {positions[i, 0]} {positions[i, 1]}")
+                print(f"\tn: {normals[i, 0]} {normals[i, 1]}")
+                print(f"\tuv: {uvs[i, 0]}")
+                print(f"\td: {distances[i]}")
+                print(f"\tindex: {indices[i]}")
 
             elif dim == 3:
                 print("CPU Interaction Baseline")
-                print(f"\tp: {cpu_interaction_baseline.p[0]} {cpu_interaction_baseline.p[1]} {cpu_interaction_baseline.p[2]}")
-                print(f"\tn: {cpu_interaction_baseline.n[0]} {cpu_interaction_baseline.n[1]} {cpu_interaction_baseline.n[2]}")
-                print(f"\tuv: {cpu_interaction_baseline.uv[0]} {cpu_interaction_baseline.uv[1]}")
-                print(f"\td: {cpu_interaction_baseline.d}")
-                print(f"\tindex: {cpu_interaction_baseline.primitive_index}")
+                print(f"\tp: {baseline_positions[i, 0]} {baseline_positions[i, 1]} {baseline_positions[i, 2]}")
+                print(f"\tn: {baseline_normals[i, 0]} {baseline_normals[i, 1]} {baseline_normals[i, 2]}")
+                print(f"\tuv: {baseline_uvs[i, 0]} {baseline_uvs[i, 1]}")
+                print(f"\td: {baseline_distances[i]}")
+                print(f"\tindex: {baseline_indices[i]}")
                 print("CPU Interaction")
-                print(f"\tp: {cpu_interaction.p[0]} {cpu_interaction.p[1]} {cpu_interaction.p[2]}")
-                print(f"\tn: {cpu_interaction.n[0]} {cpu_interaction.n[1]} {cpu_interaction.n[2]}")
-                print(f"\tuv: {cpu_interaction.uv[0]} {cpu_interaction.uv[1]}")
-                print(f"\td: {cpu_interaction.d}")
-                print(f"\tindex: {cpu_interaction.primitive_index}")
+                print(f"\tp: {positions[i, 0]} {positions[i, 1]} {positions[i, 2]}")
+                print(f"\tn: {normals[i, 0]} {normals[i, 1]} {normals[i, 2]}")
+                print(f"\tuv: {uvs[i, 0]} {uvs[i, 1]}")
+                print(f"\td: {distances[i]}")
+                print(f"\tindex: {indices[i]}")
 
 def compare_cpu_gpu_interactions(cpu_interactions, gpu_interactions, dim):
     n_queries = len(cpu_interactions)
-    for i in range(n_queries):
-        cpu_interaction = cpu_interactions[i]
-        gpu_interaction = gpu_interactions[i]
-        different_indices = (cpu_interaction.primitive_index == -1 and gpu_interaction.index != 4294967295) or \
-                            (cpu_interaction.primitive_index != -1 and gpu_interaction.index == 4294967295)
 
-        if different_indices:
+    # use bulk extraction for fast comparison
+    cpu_indices = cpu_interactions.get_primitive_indices()
+    gpu_indices = gpu_interactions.get_indices()
+
+    # find mismatches: GPU uses 4294967295 as invalid, CPU uses -1
+    different_mask = ((cpu_indices == -1) & (gpu_indices != 4294967295)) | \
+                     ((cpu_indices != -1) & (gpu_indices == 4294967295))
+
+    if np.any(different_mask):
+        # extract all data at once for mismatched entries
+        cpu_positions = cpu_interactions.get_positions()
+        cpu_normals = cpu_interactions.get_normals()
+        cpu_uvs = cpu_interactions.get_uvs()
+        cpu_distances = cpu_interactions.get_distances()
+
+        gpu_positions = gpu_interactions.get_positions()
+        gpu_normals = gpu_interactions.get_normals()
+        gpu_uvs = gpu_interactions.get_uvs()
+        gpu_distances = gpu_interactions.get_distances()
+
+        # print mismatches
+        mismatch_indices = np.where(different_mask)[0]
+        for i in mismatch_indices:
             print(f"#{i}/{n_queries}")
             if dim == 2:
                 print("CPU Interaction")
-                print(f"\tp: {cpu_interaction.p[0]} {cpu_interaction.p[1]}")
-                print(f"\tn: {cpu_interaction.n[0]} {cpu_interaction.n[1]}")
-                print(f"\tuv: {cpu_interaction.uv[0]}")
-                print(f"\td: {cpu_interaction.d}")
-                print(f"\tindex: {cpu_interaction.primitive_index}")
+                print(f"\tp: {cpu_positions[i, 0]} {cpu_positions[i, 1]}")
+                print(f"\tn: {cpu_normals[i, 0]} {cpu_normals[i, 1]}")
+                print(f"\tuv: {cpu_uvs[i, 0]}")
+                print(f"\td: {cpu_distances[i]}")
+                print(f"\tindex: {cpu_indices[i]}")
                 print("GPU Interaction")
-                print(f"\tp: {gpu_interaction.p.x} {gpu_interaction.p.y}")
-                print(f"\tn: {gpu_interaction.n.x} {gpu_interaction.n.y}")
-                print(f"\tuv: {gpu_interaction.uv.x}")
-                print(f"\td: {gpu_interaction.d}")
-                print(f"\tindex: {gpu_interaction.index}")
+                print(f"\tp: {gpu_positions[i, 0]} {gpu_positions[i, 1]}")
+                print(f"\tn: {gpu_normals[i, 0]} {gpu_normals[i, 1]}")
+                print(f"\tuv: {gpu_uvs[i, 0]}")
+                print(f"\td: {gpu_distances[i]}")
+                print(f"\tindex: {gpu_indices[i]}")
 
             elif dim == 3:
                 print("CPU Interaction")
-                print(f"\tp: {cpu_interaction.p[0]} {cpu_interaction.p[1]} {cpu_interaction.p[2]}")
-                print(f"\tn: {cpu_interaction.n[0]} {cpu_interaction.n[1]} {cpu_interaction.n[2]}")
-                print(f"\tuv: {cpu_interaction.uv[0]} {cpu_interaction.uv[1]}")
-                print(f"\td: {cpu_interaction.d}")
-                print(f"\tindex: {cpu_interaction.primitive_index}")
+                print(f"\tp: {cpu_positions[i, 0]} {cpu_positions[i, 1]} {cpu_positions[i, 2]}")
+                print(f"\tn: {cpu_normals[i, 0]} {cpu_normals[i, 1]} {cpu_normals[i, 2]}")
+                print(f"\tuv: {cpu_uvs[i, 0]} {cpu_uvs[i, 1]}")
+                print(f"\td: {cpu_distances[i]}")
+                print(f"\tindex: {cpu_indices[i]}")
                 print("GPU Interaction")
-                print(f"\tp: {gpu_interaction.p.x} {gpu_interaction.p.y} {gpu_interaction.p.z}")
-                print(f"\tn: {gpu_interaction.n.x} {gpu_interaction.n.y} {gpu_interaction.n.z}")
-                print(f"\tuv: {gpu_interaction.uv.x} {gpu_interaction.uv.y}")
-                print(f"\td: {gpu_interaction.d}")
-                print(f"\tindex: {gpu_interaction.index}")
+                print(f"\tp: {gpu_positions[i, 0]} {gpu_positions[i, 1]} {gpu_positions[i, 2]}")
+                print(f"\tn: {gpu_normals[i, 0]} {gpu_normals[i, 1]} {gpu_normals[i, 2]}")
+                print(f"\tuv: {gpu_uvs[i, 0]} {gpu_uvs[i, 1]}")
+                print(f"\td: {gpu_distances[i]}")
+                print(f"\tindex: {gpu_indices[i]}")
 
 def compare_warp_and_gpu_interactions(warp_faces, warp_points, warp_dist, gpu_interactions):
     n_queries = len(gpu_interactions)
-    for i in range(n_queries):
-        gpu_interaction = gpu_interactions[i]
-        different_indices = (warp_faces[i] == -1 and gpu_interaction.index != 4294967295) or \
-                            (warp_faces[i] != -1 and gpu_interaction.index == 4294967295)
 
-        if different_indices:
+    # use bulk extraction for GPU interactions (3-10x faster than Python loops)
+    gpu_indices = gpu_interactions.get_indices()
+    gpu_positions = gpu_interactions.get_positions()
+    gpu_distances = gpu_interactions.get_distances()
+
+    # find mismatches: Warp uses -1 as invalid, GPU uses 4294967295
+    different_mask = ((warp_faces == -1) & (gpu_indices != 4294967295)) | \
+                     ((warp_faces != -1) & (gpu_indices == 4294967295))
+
+    if np.any(different_mask):
+        # print mismatches
+        mismatch_indices = np.where(different_mask)[0]
+        for i in mismatch_indices:
             print(f"#{i}/{n_queries}")
             print("Warp Interaction")
             print(f"\tp: {warp_points[i][0]} {warp_points[i][1]} {warp_points[i][2]}")
             print(f"\td: {warp_dist[i]}")
             print(f"\tindex: {warp_faces[i]}")
             print("GPU Interaction")
-            print(f"\tp: {gpu_interaction.p.x} {gpu_interaction.p.y} {gpu_interaction.p.z}")
-            print(f"\td: {gpu_interaction.d}")
-            print(f"\tindex: {gpu_interaction.index}")
+            print(f"\tp: {gpu_positions[i, 0]} {gpu_positions[i, 1]} {gpu_positions[i, 2]}")
+            print(f"\td: {gpu_distances[i]}")
+            print(f"\tindex: {gpu_indices[i]}")
+
+def test_robust_ray_intersection(positions, indices, scene, n_queries):
+    """Test robust ray-triangle intersection (3D only).
+
+    This test verifies that the robust ray intersection binding works properly
+    by shooting rays from the mesh centroid toward random edge points.
+    The robust method should achieve better hit rates than the default method.
+    """
+    # compute centroid
+    centroid = np.mean(positions, axis=0)
+    print(f"Mesh centroid: {centroid}")
+
+    # generate rays toward edge points
+    print("\nGenerating rays toward edge points")
+    ray_origins, ray_directions = generate_edge_rays(n_queries, positions, indices, centroid)
+    ray_distance_bounds = np.inf * np.ones(n_queries, dtype=np.float32)
+
+    # run default intersection
+    print("\nRunning default intersection")
+    default_interactions = fcpw.Interaction3DList()
+    scene.intersect(ray_origins, ray_directions, ray_distance_bounds, default_interactions, False)
+
+    # run robust intersection
+    print("\nRunning robust intersection")
+    robust_interactions = fcpw.Interaction3DList()
+    scene.intersect_robust(ray_origins, ray_directions, ray_distance_bounds, robust_interactions)
+
+    # count hits
+    default_indices = default_interactions.get_primitive_indices()
+    robust_indices = robust_interactions.get_primitive_indices()
+    default_hits = sum(1 for idx in default_indices if idx != -1)
+    robust_hits = sum(1 for idx in robust_indices if idx != -1)
+
+    print(f"Default method hits: {default_hits}/{n_queries} ({100*default_hits/n_queries:.1f}%)")
+    print(f"Robust method hits: {robust_hits}/{n_queries} ({100*robust_hits/n_queries:.1f}%)")
+
+    # also test single-ray API
+    ray = fcpw.Ray3D(ray_origins[0], ray_directions[0], ray_distance_bounds[0])
+    default_interaction = fcpw.Interaction3D()
+    hit_default = scene.intersect(ray, default_interaction, False)
+
+    ray = fcpw.Ray3D(ray_origins[0], ray_directions[0], ray_distance_bounds[0])
+    robust_interaction = fcpw.Interaction3D()
+    hit_robust = scene.intersect_robust(ray, robust_interaction)
+
+    print(f"Single-ray API test: default={hit_default}, robust={hit_robust}")
+
+    return robust_hits >= default_hits
 
 def visualize_polyscope_scene(positions, indices, query_points, random_directions,
                               random_squared_radii, interior_points, dim):
     ps.init()
-    ps.register_point_cloud("query points", np.array(query_points))
+    ps.register_point_cloud("query points", query_points)
     if len(interior_points) > 0:
-        ps.register_point_cloud("interior points", np.array(interior_points))
+        ps.register_point_cloud("interior points", interior_points)
 
     if dim == 2:
-        ps.register_curve_network("scene", np.array(positions), np.array(indices))
+        ps.register_curve_network("scene", positions, indices)
 
     elif dim == 3:
-        ps.register_surface_mesh("scene", np.array(positions), np.array(indices))
+        ps.register_surface_mesh("scene", positions, indices)
 
-    ps.get_point_cloud("query points").add_vector_quantity("random directions", np.array(random_directions))
-    ps.get_point_cloud("query points").add_scalar_quantity("random squared radii", np.array(random_squared_radii))
+    ps.get_point_cloud("query points").add_vector_quantity("random directions", random_directions)
+    ps.get_point_cloud("query points").add_scalar_quantity("random squared radii", random_squared_radii)
     ps.get_point_cloud("query points").set_point_radius_quantity("random squared radii")
 
     ps.show()
 
 def run(file_path, n_queries, compute_silhouettes, compare_with_cpu_baseline,
-        run_gpu_queries, compare_with_warp, refit_gpu_scene, visualize_scene, dim):
+        run_gpu_queries, compare_with_warp, test_robust_intersection,
+        refit_gpu_scene, visualize_scene, dim, device_backend="default"):
     print("Loading OBJ")
     positions, indices = load_obj(file_path, dim)
 
     print("\nBuilding BVH on CPU")
-    scene = load_fcpw_scene(positions, indices, fcpw.aggregate_type.bvh_overlap_surface_area,
+    scene = load_fcpw_scene(positions, indices, fcpw.AggregateType.Bvh_OverlapSurfaceArea,
                             compute_silhouettes, False, dim, True)
+
+    if test_robust_intersection and dim == 3:
+        print("\nTesting robust ray intersection")
+        test_robust_ray_intersection(positions, indices, scene, n_queries)
 
     print("\nGenerating query data")
     bounding_box = compute_bounding_box(positions)
-    query_points, random_directions, random_squared_radii = \
-        generate_scattered_points_and_rays(n_queries, bounding_box, dim)
+    query_points, random_directions, random_squared_radii = generate_scattered_points_and_rays(n_queries, bounding_box, dim)
 
-    rand_nums = [None] * n_queries
-    flip_normal_orientation = [None] * n_queries
+    query_bounds = np.inf * np.ones(n_queries, dtype=np.float32)
+    rand_nums = np.random.rand(n_queries, dim)
     is_interior = tag_interior_points(scene, query_points)
-    for q in range(n_queries):
-        rand_nums[q] = np.random.rand(dim)
-        flip_normal_orientation[q] = not is_interior[q]
+    flip_normal_orientation = np.array([0 if not is_interior[q] else 1 for q in range(n_queries)], dtype=int)
 
     baseline_cpu_ray_interactions = None
+    baseline_cpu_robust_ray_interactions = None
     baseline_cpu_sphere_interactions = None
     baseline_cpu_cpq_interactions = None
     baseline_cpu_cspq_interactions = None
     if compare_with_cpu_baseline:
-        baseline_scene = load_fcpw_scene(positions, indices, fcpw.aggregate_type.baseline,
+        baseline_scene = load_fcpw_scene(positions, indices, fcpw.AggregateType.Baseline,
                                          compute_silhouettes, False, dim, True)
 
         print("\nRunning Baseline CPU Queries")
         baseline_cpu_ray_interactions = run_cpu_ray_intersection_queries(
-            baseline_scene, query_points, random_directions, dim)
+            baseline_scene, query_points, random_directions, query_bounds, dim)
+        if dim == 3:
+            baseline_cpu_robust_ray_interactions = run_cpu_robust_ray_intersection_queries(
+                baseline_scene, query_points, random_directions, query_bounds)
         baseline_cpu_sphere_interactions = run_cpu_sphere_intersection_queries(
             baseline_scene, query_points, random_squared_radii, rand_nums, dim)
         baseline_cpu_cpq_interactions = run_cpu_closest_point_queries(
-            baseline_scene, query_points, dim)
+            baseline_scene, query_points, query_bounds, dim)
         if compute_silhouettes:
             baseline_cpu_cspq_interactions = run_cpu_closest_silhouette_point_queries(
-                baseline_scene, query_points, flip_normal_orientation, dim)
+                baseline_scene, query_points, query_bounds, flip_normal_orientation, dim)
 
     gpu_ray_interactions = None
     gpu_sphere_interactions = None
@@ -584,40 +617,37 @@ def run(file_path, n_queries, compute_silhouettes, compare_with_cpu_baseline,
     gpu_cspq_interactions = None
     if run_gpu_queries:
         print("\nTransferring CPU BVH to GPU")
-        gpu_scene, gpu_ray_list, gpu_bounding_sphere_list, gpu_infinite_sphere_list, \
-        gpu_rand_nums, gpu_flip_normal_orientation = \
-            init_gpu_data(n_queries, query_points, random_directions, random_squared_radii,
-                          rand_nums, flip_normal_orientation, dim)
-        gpu_scene.transfer_to_gpu(scene)
+        gpu_scene = init_gpu_data(n_queries, dim)
+        gpu_scene.transfer_to_gpu(scene, device_backend)
 
         if refit_gpu_scene:
             print("\nRefitting GPU BVH")
             gpu_scene.refit(scene)
 
         print("\nRunning BVH GPU Queries")
-        gpu_ray_interactions = fcpw.gpu_interaction_list()
-        gpu_scene.intersect(gpu_ray_list, gpu_ray_interactions)
+        gpu_ray_interactions = fcpw.GPUInteractionList()
+        gpu_scene.intersect(query_points, random_directions, query_bounds, gpu_ray_interactions)
 
-        gpu_sphere_interactions = fcpw.gpu_interaction_list()
-        gpu_scene.intersect(gpu_bounding_sphere_list, gpu_rand_nums, gpu_sphere_interactions)
+        gpu_sphere_interactions = fcpw.GPUInteractionList()
+        gpu_scene.intersect(query_points, random_squared_radii, rand_nums, gpu_sphere_interactions)
 
-        gpu_cpq_interactions = fcpw.gpu_interaction_list()
-        gpu_scene.find_closest_points(gpu_infinite_sphere_list, gpu_cpq_interactions)
+        gpu_cpq_interactions = fcpw.GPUInteractionList()
+        gpu_scene.find_closest_points(query_points, query_bounds, gpu_cpq_interactions)
 
         if compute_silhouettes:
-            gpu_cspq_interactions = fcpw.gpu_interaction_list()
-            gpu_scene.find_closest_silhouette_points(gpu_infinite_sphere_list,
-                                                     gpu_flip_normal_orientation,
+            gpu_cspq_interactions = fcpw.GPUInteractionList()
+            gpu_scene.find_closest_silhouette_points(query_points, query_bounds,
+                                                     flip_normal_orientation,
                                                      gpu_cspq_interactions)
 
     if compare_with_warp and run_gpu_queries and dim == 3:
         wp.init()
-        device_points = wp.array(data=np.array(query_points), dtype=wp.vec3, device="cuda:0")
-        device_directions = wp.array(data=np.array(random_directions), dtype=wp.vec3, device="cuda:0")
+        device_points = wp.array(data=query_points, dtype=wp.vec3, device="cuda:0")
+        device_directions = wp.array(data=random_directions, dtype=wp.vec3, device="cuda:0")
         device_parametric_dist = wp.full(shape=n_queries, value=np.inf, dtype=float, device="cuda:0")
-        wp_mesh = wp.Mesh(points=wp.array(data=np.array(positions), dtype=wp.vec3, device="cuda:0"),
-                          indices=wp.array(data=np.array(indices).flatten(), dtype=int, device="cuda:0"),
-                          velocities=None)
+        wp_mesh = wp.Mesh(points=wp.array(data=positions, dtype=wp.vec3, device="cuda:0"),
+                          indices=wp.array(data=indices.flatten(), dtype=int, device="cuda:0"),
+                          velocities=None, bvh_constructor="sah")
 
         host_intersection_faces = wp.full(shape=n_queries, value=-1, dtype=int, device="cpu")
         host_intersection_hit_points = wp.zeros(shape=n_queries, dtype=wp.vec3, device="cpu")
@@ -625,7 +655,7 @@ def run(file_path, n_queries, compute_silhouettes, compare_with_cpu_baseline,
         device_intersection_faces = wp.full(shape=n_queries, value=-1, dtype=int, device="cuda:0")
         device_intersection_hit_points = wp.zeros(shape=n_queries, dtype=wp.vec3, device="cuda:0")
         device_intersection_dist = wp.full(shape=n_queries, value=np.inf, dtype=float, device="cuda:0")
-        with wp.ScopedTimer("Warp ray intersection queries", cuda_filter=wp.TIMING_ALL):
+        with wp.ScopedTimer("Warp ray intersection queries", cuda_filter=wp.TIMING_KERNEL):
             wp.launch(kernel=run_warp_ray_intersection_queries, dim=n_queries,
                     inputs=[wp_mesh.id, device_points, device_directions, device_parametric_dist,
                             device_intersection_faces, device_intersection_hit_points,
@@ -642,7 +672,7 @@ def run(file_path, n_queries, compute_silhouettes, compare_with_cpu_baseline,
         device_closest_point_faces = wp.full(shape=n_queries, value=-1, dtype=int, device="cuda:0")
         device_closest_points = wp.zeros(shape=n_queries, dtype=wp.vec3, device="cuda:0")
         device_closest_point_dist = wp.full(shape=n_queries, value=np.inf, dtype=float, device="cuda:0")
-        with wp.ScopedTimer("Warp closest point queries", cuda_filter=wp.TIMING_ALL):
+        with wp.ScopedTimer("Warp closest point queries", cuda_filter=wp.TIMING_KERNEL):
             wp.launch(kernel=run_warp_closest_point_queries, dim=n_queries,
                     inputs=[wp_mesh.id, device_points, device_parametric_dist,
                             device_closest_point_faces, device_closest_points,
@@ -667,19 +697,25 @@ def run(file_path, n_queries, compute_silhouettes, compare_with_cpu_baseline,
     print("\nRunning BVH CPU Queries")
     cpu_sphere_interactions = run_cpu_sphere_intersection_queries(
         scene, query_points, random_squared_radii, rand_nums, dim)
-    scene.build(fcpw.aggregate_type.bvh_overlap_surface_area, True, True)
+    scene.build(fcpw.AggregateType.Bvh_OverlapSurfaceArea, True, True)
     cpu_ray_interactions = run_cpu_ray_intersection_queries(
-        scene, query_points, random_directions, dim)
+        scene, query_points, random_directions, query_bounds, dim)
+    if dim == 3:
+        cpu_robust_ray_interactions = run_cpu_robust_ray_intersection_queries(
+            scene, query_points, random_directions, query_bounds)
     cpu_cpq_interactions = run_cpu_closest_point_queries(
-        scene, query_points, dim)
+        scene, query_points, query_bounds, dim)
     cpu_cspq_interactions = None
     if compute_silhouettes:
         cpu_cspq_interactions = run_cpu_closest_silhouette_point_queries(
-            scene, query_points, flip_normal_orientation, dim)
+            scene, query_points, query_bounds, flip_normal_orientation, dim)
 
     if compare_with_cpu_baseline:
         print("\nComparing CPU ray intersection query results...")
         compare_cpu_interactions(baseline_cpu_ray_interactions, cpu_ray_interactions, dim)
+        if dim == 3:
+            print("\nComparing CPU robust ray intersection query results...")
+            compare_cpu_interactions(baseline_cpu_robust_ray_interactions, cpu_robust_ray_interactions, 3)
         print("\nComparing CPU closest point query results...")
         compare_cpu_interactions(baseline_cpu_cpq_interactions, cpu_cpq_interactions, dim)
         if compute_silhouettes:
@@ -711,12 +747,15 @@ def main():
     parser.add_argument("--compare_with_cpu_baseline", action="store_true", help="compare with CPU baseline")
     parser.add_argument("--run_gpu_queries", action="store_true", help="run GPU queries")
     parser.add_argument("--compare_with_warp", action="store_true", help="compare with warp")
+    parser.add_argument("--test_robust_intersection", action="store_true", help="test robust ray intersection queries (3D only)")
     parser.add_argument("--refit_gpu_scene", action="store_true", help="refit GPU scene")
     parser.add_argument("--visualize_scene", action="store_true", help="visualize scene")
+    parser.add_argument("--device_backend", type=str, default="default", choices=["default", "cuda", "vulkan"], help="GPU backend")
     args = parser.parse_args()
 
     run(args.file_path, args.n_queries, args.compute_silhouettes, args.compare_with_cpu_baseline,
-        args.run_gpu_queries, args.compare_with_warp, args.refit_gpu_scene, args.visualize_scene, args.dim)
+        args.run_gpu_queries, args.compare_with_warp, args.test_robust_intersection,
+        args.refit_gpu_scene, args.visualize_scene, args.dim, args.device_backend)
 
 if __name__ == "__main__":
     main()

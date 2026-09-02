@@ -1,4 +1,4 @@
-implementing bvh;
+implementing fcpw;
 __include ray;
 __include math_constants;
 __include interaction;
@@ -10,10 +10,13 @@ public interface IPrimitive
     BoundingBox getBoundingBox();
 
     // returns the centroid of the primitive
-    float3 centroid();
+    float3 getCentroid();
+
+    // returns the normal of the primitive
+    float3 getNormal();
 
     // returns the surface area of the primitive
-    float surfaceArea();
+    float getSurfaceArea();
 
     // intersects primitive with ray
     bool intersect(Ray r, bool checkForOcclusion, inout Interaction i);
@@ -30,6 +33,48 @@ public interface IPrimitive
     // returns the index of the primitive
     uint getIndex();
 };
+
+public bool intersectLineSegment(float3 pa, float3 pb,
+                                 float3 ro, float3 rd, float rtMax, bool checkForOcclusion,
+                                 inout float3 p, inout float3 n, inout float2 uv, inout float d)
+{
+    float3 u = pa - ro;
+    float3 v = pb - pa;
+
+    // return if line segment and ray are parallel
+    float dv = cross(rd, v)[2];
+    if (abs(dv) <= FLT_EPSILON)
+    {
+        return false;
+    }
+
+    // solve ro + t*rd = pa + s*(pb - pa) for t >= 0 && 0 <= s <= 1
+    // s = (u x rd)/(rd x v)
+    float ud = cross(u, rd)[2];
+    float s = ud / dv;
+
+    if (s >= 0.0 && s <= 1.0)
+    {
+        // t = (u x v)/(rd x v)
+        float t = cross(u, v)[2] / dv;
+
+        if (t >= 0.0 && t <= rtMax)
+        {
+            if (checkForOcclusion)
+            {
+                return true;
+            }
+
+            p = pa + s * v;
+            n = normalize(float3(v[1], -v[0], 0.0));
+            uv = float2(s, 0.0);
+            d = t;
+            return true;
+        }
+    }
+
+    return false;
+}
 
 public float findClosestPointLineSegment(float3 pa, float3 pb, float3 x, out float3 p, out float t)
 {
@@ -71,13 +116,22 @@ public struct LineSegment : IPrimitive
     }
 
     // returns the centroid of the primitive
-    public float3 centroid()
+    public float3 getCentroid()
     {
         return 0.5 * (pa + pb);
     }
 
+    // returns the normal of the primitive
+    public float3 getNormal()
+    {
+        float3 s = pb - pa;
+        float3 n = float3(s.y, -s.x, 0.0);
+
+        return normalize(n);
+    }
+
     // returns the surface area of the primitive
-    public float surfaceArea()
+    public float getSurfaceArea()
     {
         return length(pb - pa);
     }
@@ -86,42 +140,11 @@ public struct LineSegment : IPrimitive
     // NOTE: specialized to 2D (z coordinate == 0)
     public bool intersect(Ray r, bool checkForOcclusion, inout Interaction i)
     {
-        float3 u = pa - r.o;
-        float3 v = pb - pa;
-
-        // return if line segment and ray are parallel
-        float dv = cross(r.d, v)[2];
-        if (abs(dv) <= FLT_EPSILON)
+        bool didIntersect = intersectLineSegment(pa, pb, r.o, r.d, r.tMax, checkForOcclusion, i.p, i.n, i.uv, i.d);
+        if (didIntersect)
         {
-            return false;
-        }
-
-        // solve r.o + t*r.d = pa + s*(pb - pa) for t >= 0 && 0 <= s <= 1
-        // s = (u x r.d)/(r.d x v)
-        float ud = cross(u, r.d)[2];
-        float s = ud / dv;
-
-        if (s >= 0.0 && s <= 1.0)
-        {
-            // t = (u x v)/(r.d x v)
-            float uv = cross(u, v)[2];
-            float t = uv / dv;
-
-            if (t >= 0.0 && t <= r.tMax)
-            {
-                if (checkForOcclusion)
-                {
-                    i.index = index;
-                    return true;
-                }
-
-                i.p = pa + s * v;
-                i.n = normalize(float3(v[1], -v[0], 0.0));
-                i.uv = float2(s, 0.0);
-                i.d = t;
-                i.index = index;
-                return true;
-            }
+            i.index = index;
+            return true;
         }
 
         return false;
@@ -133,7 +156,7 @@ public struct LineSegment : IPrimitive
         float d = findClosestPointLineSegment(pa, pb, s.c, i.p, i.uv[0]);
         if (d * d <= s.r2)
         {
-            i.d = surfaceArea();
+            i.d = getSurfaceArea();
             i.index = index;
             return true;
         }
@@ -175,6 +198,55 @@ public struct LineSegment : IPrimitive
         return index;
     }
 };
+
+public bool intersectTriangle(float3 pa, float3 pb, float3 pc,
+                              float3 ro, float3 rd, float rtMax, bool checkForOcclusion,
+                              inout float3 p, inout float3 n, inout float2 uv, inout float d)
+{
+    // Möller–Trumbore intersection algorithm
+    float3 v1 = pb - pa;
+    float3 v2 = pc - pa;
+    float3 q = cross(rd, v2);
+    float det = dot(v1, q);
+
+    // ray and triangle are parallel if det is close to 0
+    if (abs(det) <= FLT_EPSILON)
+    {
+        return false;
+    }
+    float invDet = 1.0 / det;
+
+    float3 r = ro - pa;
+    float v = dot(r, q) * invDet;
+    if (v < 0.0 || v > 1.0)
+    {
+        return false;
+    }
+
+    float3 s = cross(r, v1);
+    float w = dot(rd, s) * invDet;
+    if (w < 0.0 || v + w > 1.0)
+    {
+        return false;
+    }
+
+    float t = dot(v2, s) * invDet;
+    if (t >= 0.0 && t <= rtMax)
+    {
+        if (checkForOcclusion)
+        {
+            return true;
+        }
+
+        p = pa + v1 * v + v2 * w;
+        n = normalize(cross(v1, v2));
+        uv = float2(1.0 - v - w, v);
+        d = t;
+        return true;
+    }
+
+    return false;
+}
 
 public float findClosestPointTriangle(float3 pa, float3 pb, float3 pc, float3 x, out float3 p, out float2 t)
 {
@@ -274,60 +346,31 @@ public struct Triangle : IPrimitive
     }
 
     // returns the centroid of the primitive
-    public float3 centroid()
+    public float3 getCentroid()
     {
         return (pa + pb + pc) / 3.0;
     }
 
     // returns the surface area of the primitive
-    public float surfaceArea()
+    public float getSurfaceArea()
     {
         return 0.5 * length(cross(pb - pa, pc - pa));
+    }
+
+    // returns the normal of the primitive
+    public float3 getNormal()
+    {
+        float3 n = cross(pb - pa, pc - pa);
+
+        return normalize(n);
     }
 
     // intersects primitive with ray
     public bool intersect(Ray r, bool checkForOcclusion, inout Interaction i)
     {
-        // Möller–Trumbore intersection algorithm
-        float3 v1 = pb - pa;
-        float3 v2 = pc - pa;
-        float3 p = cross(r.d, v2);
-        float det = dot(v1, p);
-
-        // ray and triangle are parallel if det is close to 0
-        if (abs(det) <= FLT_EPSILON)
+        bool didIntersect = intersectTriangle(pa, pb, pc, r.o, r.d, r.tMax, checkForOcclusion, i.p, i.n, i.uv, i.d);
+        if (didIntersect)
         {
-            return false;
-        }
-        float invDet = 1.0 / det;
-
-        float3 s = r.o - pa;
-        float v = dot(s, p) * invDet;
-        if (v < 0.0 || v > 1.0)
-        {
-            return false;
-        }
-
-        float3 q = cross(s, v1);
-        float w = dot(r.d, q) * invDet;
-        if (w < 0.0 || v + w > 1.0)
-        {
-            return false;
-        }
-
-        float t = dot(v2, q) * invDet;
-        if (t >= 0.0 && t <= r.tMax)
-        {
-            if (checkForOcclusion)
-            {
-                i.index = index;
-                return true;
-            }
-
-            i.p = pa + v1 * v + v2 * w;
-            i.n = normalize(cross(v1, v2));
-            i.uv = float2(1.0 - v - w, v);
-            i.d = t;
             i.index = index;
             return true;
         }
@@ -341,7 +384,7 @@ public struct Triangle : IPrimitive
         float d = findClosestPointTriangle(pa, pb, pc, s.c, i.p, i.uv);
         if (d * d <= s.r2)
         {
-            i.d = surfaceArea();
+            i.d = getSurfaceArea();
             i.index = index;
             return true;
         }
@@ -390,16 +433,13 @@ public struct Triangle : IPrimitive
 public interface ISilhouette
 {
     // returns the centroid of the silhouette
-    float3 centroid();
+    float3 getCentroid();
 
     // returns whether silhouette has two adjacent faces
     bool hasTwoAdjacentFaces();
 
     // returns normal of adjacent face
     float3 getNormal(uint fIndex);
-
-    // checks if primitive is a silhouette wrt view direction
-    bool isSilhouette(float3 viewDir, float d, bool flipNormalOrientation, float precision);
 
     // finds closest silhouette point on primitive from sphere center
     bool findClosestSilhouettePoint(BoundingSphere s, bool flipNormalOrientation,
@@ -415,7 +455,7 @@ public struct NoSilhouette : ISilhouette
     public uint index;
 
     // returns the centroid of the silhouette
-    public float3 centroid()
+    public float3 getCentroid()
     {
         return float3(0.0, 0.0, 0.0);
     }
@@ -430,12 +470,6 @@ public struct NoSilhouette : ISilhouette
     public float3 getNormal(uint fIndex)
     {
         return float3(0.0, 0.0, 0.0);
-    }
-
-    // checks if primitive is a silhouette wrt view direction
-    public bool isSilhouette(float3 viewDir, float d, bool flipNormalOrientation, float precision)
-    {
-        return false;
     }
 
     // finds closest silhouette point on primitive from sphere center
@@ -453,6 +487,40 @@ public struct NoSilhouette : ISilhouette
     }
 };
 
+public bool isSilhouetteVertex(float3 n0, float3 n1, float3 viewDir, float d, bool flipNormalOrientation, float precision)
+{
+    float sign = flipNormalOrientation ? 1.0 : -1.0;
+
+    // vertex is a silhouette point if it is concave and the query point lies on the vertex
+    if (d <= precision)
+    {
+        float det = n0.x * n1.y - n1.x * n0.y;
+        return sign * det > precision;
+    }
+
+    // vertex is a silhouette point if the query point lies on the halfplane
+    // defined by an adjacent line segment and the other segment is backfacing
+    float3 viewDirUnit = viewDir / d;
+    float dot0 = dot(viewDirUnit, n0);
+    float dot1 = dot(viewDirUnit, n1);
+
+    bool isZeroDot0 = abs(dot0) <= precision;
+    if (isZeroDot0)
+    {
+        return sign * dot1 > precision;
+    }
+
+    bool isZeroDot1 = abs(dot1) <= precision;
+    if (isZeroDot1)
+    {
+        return sign * dot0 > precision;
+    }
+
+    // vertex is a silhouette point if an adjacent line segment is frontfacing
+    // w.r.t. the query point and the other segment is backfacing
+    return dot0 * dot1 < 0.0;
+}
+
 public struct Vertex : ISilhouette
 {
     public float3 p;
@@ -462,7 +530,7 @@ public struct Vertex : ISilhouette
     public uint hasOneAdjacentFace;
 
     // returns the centroid of the silhouette
-    public float3 centroid()
+    public float3 getCentroid()
     {
         return p;
     }
@@ -482,41 +550,6 @@ public struct Vertex : ISilhouette
         }
 
         return n1;
-    }
-
-    // checks if primitive is a silhouette wrt view direction
-    public bool isSilhouette(float3 viewDir, float d, bool flipNormalOrientation, float precision)
-    {
-        float sign = flipNormalOrientation ? 1.0 : -1.0;
-
-        // vertex is a silhouette point if it is concave and the query point lies on the vertex
-        if (d <= precision)
-        {
-            float det = n0.x * n1.y - n1.x * n0.y;
-            return sign * det > precision;
-        }
-
-        // vertex is a silhouette point if the query point lies on the halfplane
-        // defined by an adjacent line segment and the other segment is backfacing
-        float3 viewDirUnit = viewDir / d;
-        float dot0 = dot(viewDirUnit, n0);
-        float dot1 = dot(viewDirUnit, n1);
-
-        bool isZeroDot0 = abs(dot0) <= precision;
-        if (isZeroDot0)
-        {
-            return sign * dot1 > precision;
-        }
-
-        bool isZeroDot1 = abs(dot1) <= precision;
-        if (isZeroDot1)
-        {
-            return sign * dot0 > precision;
-        }
-
-        // vertex is a silhouette point if an adjacent line segment is frontfacing
-        // w.r.t. the query point and the other segment is backfacing
-        return dot0 * dot1 < 0.0;
     }
 
     // finds closest silhouette point on primitive from sphere center
@@ -541,7 +574,7 @@ public struct Vertex : ISilhouette
         bool process = hasOneAdjacentFace == 1 ? true : false;
         if (!process)
         {
-            process = isSilhouette(viewDir, d, flipNormalOrientation, precision);
+            process = isSilhouetteVertex(n0, n1, viewDir, d, flipNormalOrientation, precision);
         }
 
         if (process && d * d <= s.r2)
@@ -563,6 +596,42 @@ public struct Vertex : ISilhouette
     }
 };
 
+public bool isSilhouetteEdge(float3 pa, float3 pb, float3 n0, float3 n1, float3 viewDir,
+                             float d, bool flipNormalOrientation, float precision)
+{
+    float sign = flipNormalOrientation ? 1.0 : -1.0;
+
+    // edge is a silhouette if it is concave and the query point lies on the edge
+    if (d <= precision)
+    {
+        float3 edgeDir = normalize(pb - pa);
+        float signedDihedralAngle = atan2(dot(edgeDir, cross(n0, n1)), dot(n0, n1));
+        return sign * signedDihedralAngle > precision;
+    }
+
+    // edge is a silhouette if the query point lies on the halfplane defined
+    // by an adjacent triangle and the other triangle is backfacing
+    float3 viewDirUnit = viewDir / d;
+    float dot0 = dot(viewDirUnit, n0);
+    float dot1 = dot(viewDirUnit, n1);
+
+    bool isZeroDot0 = abs(dot0) <= precision;
+    if (isZeroDot0)
+    {
+        return sign * dot1 > precision;
+    }
+
+    bool isZeroDot1 = abs(dot1) <= precision;
+    if (isZeroDot1)
+    {
+        return sign * dot0 > precision;
+    }
+
+    // edge is a silhouette if an adjacent triangle is frontfacing w.r.t. the
+    // query point and the other triangle is backfacing
+    return dot0 * dot1 < 0.0;
+}
+
 public struct Edge : ISilhouette
 {
     public float3 pa;
@@ -573,7 +642,7 @@ public struct Edge : ISilhouette
     public uint hasOneAdjacentFace;
 
     // returns the centroid of the silhouette
-    public float3 centroid()
+    public float3 getCentroid()
     {
         return 0.5 * (pa + pb);
     }
@@ -593,42 +662,6 @@ public struct Edge : ISilhouette
         }
 
         return n1;
-    }
-
-    // checks if primitive is a silhouette wrt view direction
-    public bool isSilhouette(float3 viewDir, float d, bool flipNormalOrientation, float precision)
-    {
-        float sign = flipNormalOrientation ? 1.0 : -1.0;
-
-        // edge is a silhouette if it is concave and the query point lies on the edge
-        if (d <= precision)
-        {
-            float3 edgeDir = normalize(pb - pa);
-            float signedDihedralAngle = atan2(dot(edgeDir, cross(n0, n1)), dot(n0, n1));
-            return sign * signedDihedralAngle > precision;
-        }
-
-        // edge is a silhouette if the query point lies on the halfplane defined
-        // by an adjacent triangle and the other triangle is backfacing
-        float3 viewDirUnit = viewDir / d;
-        float dot0 = dot(viewDirUnit, n0);
-        float dot1 = dot(viewDirUnit, n1);
-
-        bool isZeroDot0 = abs(dot0) <= precision;
-        if (isZeroDot0)
-        {
-            return sign * dot1 > precision;
-        }
-
-        bool isZeroDot1 = abs(dot1) <= precision;
-        if (isZeroDot1)
-        {
-            return sign * dot0 > precision;
-        }
-
-        // edge is a silhouette if an adjacent triangle is frontfacing w.r.t. the
-        // query point and the other triangle is backfacing
-        return dot0 * dot1 < 0.0;
     }
 
     // finds closest silhouette point on primitive from sphere center
@@ -653,7 +686,7 @@ public struct Edge : ISilhouette
         if (!process)
         {
             float3 viewDir = s.c - i.p;
-            process = isSilhouette(viewDir, d, flipNormalOrientation, precision);
+            process = isSilhouetteEdge(pa, pb, n0, n1, viewDir, d, flipNormalOrientation, precision);
         }
 
         if (process && d * d <= s.r2)

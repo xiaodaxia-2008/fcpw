@@ -4,10 +4,11 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "fcpw"
-version = "1.0.6"
+version = "1.2.1"
 description = "Python bindings for FCPW"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
+dependencies = ["numpy"]
 authors = [
     { name = "Rohan Sawhney" },
 ]
@@ -34,4 +35,6 @@ wheel.py-api = "cp312"
 [tool.scikit-build.cmake.define]
 FCPW_BUILD_BINDINGS = "ON"
 FCPW_ENABLE_GPU_SUPPORT = "OFF"
-FCPW_USE_ENOKI = "ON"
+FCPW_USE_ENOKI = "OFF"
+FCPW_BUILD_DEMO = "OFF"
+FCPW_BUILD_TESTS = "OFF"

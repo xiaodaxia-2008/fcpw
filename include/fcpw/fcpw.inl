@@ -16,14 +16,14 @@ struct MbvhNode {};
 namespace fcpw {
 
 template<size_t DIM>
-inline Scene<DIM>::Scene():
+Scene<DIM>::Scene():
 sceneData(new SceneData<DIM>())
 {
 
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::setObjectTypes(const std::vector<std::vector<PrimitiveType>>& objectTypes)
+void Scene<DIM>::setObjectTypes(const std::vector<std::vector<PrimitiveType>>& objectTypes)
 {
     std::cerr << "setObjectTypes(): DIM: " << DIM << std::endl;
     exit(EXIT_FAILURE);
@@ -88,13 +88,13 @@ inline void Scene<3>::setObjectTypes(const std::vector<std::vector<PrimitiveType
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::setObjectVertexCount(int nVertices, int objectIndex)
+void Scene<DIM>::setObjectVertexCount(int nVertices, int objectIndex)
 {
     sceneData->soups[objectIndex].positions.resize(nVertices);
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::setObjectLineSegmentCount(int nLineSegments, int objectIndex)
+void Scene<DIM>::setObjectLineSegmentCount(int nLineSegments, int objectIndex)
 {
     std::cerr << "setObjectLineSegmentCount(): DIM: " << DIM << std::endl;
     exit(EXIT_FAILURE);
@@ -114,14 +114,14 @@ inline void Scene<2>::setObjectLineSegmentCount(int nLineSegments, int objectInd
         if (objectsMap[i].first == ObjectType::LineSegments) {
             int lineSegmentObjectIndex = objectsMap[i].second;
             sceneData->lineSegmentObjects[lineSegmentObjectIndex] =
-                    std::unique_ptr<std::vector<LineSegment>>(new std::vector<LineSegment>(nLineSegments));
+                std::unique_ptr<std::vector<LineSegment>>(new std::vector<LineSegment>(nLineSegments));
             break;
         }
     }
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::setObjectTriangleCount(int nTriangles, int objectIndex)
+void Scene<DIM>::setObjectTriangleCount(int nTriangles, int objectIndex)
 {
     std::cerr << "setObjectTriangleCount(): DIM: " << DIM << std::endl;
     exit(EXIT_FAILURE);
@@ -141,20 +141,20 @@ inline void Scene<3>::setObjectTriangleCount(int nTriangles, int objectIndex)
         if (objectsMap[i].first == ObjectType::Triangles) {
             int triangleObjectIndex = objectsMap[i].second;
             sceneData->triangleObjects[triangleObjectIndex] =
-                    std::unique_ptr<std::vector<Triangle>>(new std::vector<Triangle>(nTriangles));
+                std::unique_ptr<std::vector<Triangle>>(new std::vector<Triangle>(nTriangles));
             break;
         }
     }
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::setObjectVertex(const Vector<DIM>& position, int vertexIndex, int objectIndex)
+void Scene<DIM>::setObjectVertex(const Vector<DIM>& position, int vertexIndex, int objectIndex)
 {
     sceneData->soups[objectIndex].positions[vertexIndex] = position;
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::setObjectLineSegment(const Vector2i& indices, int lineSegmentIndex, int objectIndex)
+void Scene<DIM>::setObjectLineSegment(const Vector2i& indices, int lineSegmentIndex, int objectIndex)
 {
     std::cerr << "setObjectLineSegment(): DIM: " << DIM << std::endl;
     exit(EXIT_FAILURE);
@@ -178,7 +178,7 @@ inline void Scene<2>::setObjectLineSegment(const Vector2i& indices, int lineSegm
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::setObjectTriangle(const Vector3i& indices, int triangleIndex, int objectIndex)
+void Scene<DIM>::setObjectTriangle(const Vector3i& indices, int triangleIndex, int objectIndex)
 {
     std::cerr << "setObjectTriangle(): DIM: " << DIM << std::endl;
     exit(EXIT_FAILURE);
@@ -204,7 +204,7 @@ inline void Scene<3>::setObjectTriangle(const Vector3i& indices, int triangleInd
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::setObjectCount(int nObjects)
+void Scene<DIM>::setObjectCount(int nObjects)
 {
     // clear old data
     sceneData->clearAggregateData();
@@ -216,7 +216,18 @@ inline void Scene<DIM>::setObjectCount(int nObjects)
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::setObjectVertices(const std::vector<Vector<DIM>>& positions, int objectIndex)
+void Scene<DIM>::setObjectVertices(const Eigen::MatrixXf& positions, int objectIndex)
+{
+    int nVertices = (int)positions.rows();
+    setObjectVertexCount(nVertices, objectIndex);
+
+    for (int i = 0; i < nVertices; i++) {
+        setObjectVertex(positions.row(i), i, objectIndex);
+    }
+}
+
+template<size_t DIM>
+void Scene<DIM>::setObjectVertices(const std::vector<Vector<DIM>>& positions, int objectIndex)
 {
     int nVertices = (int)positions.size();
     setObjectVertexCount(nVertices, objectIndex);
@@ -227,7 +238,45 @@ inline void Scene<DIM>::setObjectVertices(const std::vector<Vector<DIM>>& positi
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::setObjectLineSegments(const std::vector<Vector2i>& indices, int objectIndex)
+void Scene<DIM>::setObjectLineSegments(const Eigen::MatrixXi& indices, int objectIndex)
+{
+    std::cerr << "setObjectLineSegments(): DIM: " << DIM << std::endl;
+    exit(EXIT_FAILURE);
+}
+
+template<>
+inline void Scene<2>::setObjectLineSegments(const Eigen::MatrixXi& indices, int objectIndex)
+{
+    const std::vector<std::pair<ObjectType, int>>& objectsMap = sceneData->soupToObjectsMap[objectIndex];
+    for (int i = 0; i < (int)objectsMap.size(); i++) {
+        if (objectsMap[i].first == ObjectType::LineSegments) {
+            std::cerr << "Already set line segments!" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    // create line segments
+    int nLineSegments = (int)indices.rows();
+    int nLineSegmentObjects = (int)sceneData->lineSegmentObjects.size();
+    sceneData->soupToObjectsMap[objectIndex].emplace_back(std::make_pair(ObjectType::LineSegments,
+                                                                         nLineSegmentObjects));
+    sceneData->lineSegmentObjects.resize(nLineSegmentObjects + 1);
+    sceneData->lineSegmentObjects[nLineSegmentObjects] =
+        std::unique_ptr<std::vector<LineSegment>>(new std::vector<LineSegment>(nLineSegments));
+
+    // resize soup indices
+    PolygonSoup<2>& soup = sceneData->soups[objectIndex];
+    int nIndices = (int)soup.indices.size();
+    soup.indices.resize(nIndices + 2*nLineSegments);
+
+    // set line segments
+    for (int i = 0; i < nLineSegments; i++) {
+        setObjectLineSegment(indices.row(i), i, objectIndex);
+    }
+}
+
+template<size_t DIM>
+void Scene<DIM>::setObjectLineSegments(const std::vector<Vector2i>& indices, int objectIndex)
 {
     std::cerr << "setObjectLineSegments(): DIM: " << DIM << std::endl;
     exit(EXIT_FAILURE);
@@ -265,7 +314,45 @@ inline void Scene<2>::setObjectLineSegments(const std::vector<Vector2i>& indices
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::setObjectTriangles(const std::vector<Vector3i>& indices, int objectIndex)
+void Scene<DIM>::setObjectTriangles(const Eigen::MatrixXi& indices, int objectIndex)
+{
+    std::cerr << "setObjectTriangles(): DIM: " << DIM << std::endl;
+    exit(EXIT_FAILURE);
+}
+
+template<>
+inline void Scene<3>::setObjectTriangles(const Eigen::MatrixXi& indices, int objectIndex)
+{
+    const std::vector<std::pair<ObjectType, int>>& objectsMap = sceneData->soupToObjectsMap[objectIndex];
+    for (int i = 0; i < (int)objectsMap.size(); i++) {
+        if (objectsMap[i].first == ObjectType::Triangles) {
+            std::cerr << "Already set triangles!" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    // create line segment object
+    int nTriangles = (int)indices.rows();
+    int nTriangleObjects = (int)sceneData->triangleObjects.size();
+    sceneData->soupToObjectsMap[objectIndex].emplace_back(std::make_pair(ObjectType::Triangles,
+                                                                         nTriangleObjects));
+    sceneData->triangleObjects.resize(nTriangleObjects + 1);
+    sceneData->triangleObjects[nTriangleObjects] =
+        std::unique_ptr<std::vector<Triangle>>(new std::vector<Triangle>(nTriangles));
+
+    // resize soup indices
+    PolygonSoup<3>& soup = sceneData->soups[objectIndex];
+    int nIndices = (int)soup.indices.size();
+    soup.indices.resize(nIndices + 3*nTriangles);
+
+    // set triangles
+    for (int i = 0; i < nTriangles; i++) {
+        setObjectTriangle(indices.row(i), i, objectIndex);
+    }
+}
+
+template<size_t DIM>
+void Scene<DIM>::setObjectTriangles(const std::vector<Vector3i>& indices, int objectIndex)
 {
     std::cerr << "setObjectTriangles(): DIM: " << DIM << std::endl;
     exit(EXIT_FAILURE);
@@ -303,14 +390,14 @@ inline void Scene<3>::setObjectTriangles(const std::vector<Vector3i>& indices, i
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::setObjectInstanceTransforms(const std::vector<Transform<DIM>>& transforms, int objectIndex)
+void Scene<DIM>::setObjectInstanceTransforms(const std::vector<Transform<DIM>>& transforms, int objectIndex)
 {
     std::vector<Transform<DIM>>& objectTransforms = sceneData->instanceTransforms[objectIndex];
     objectTransforms.insert(objectTransforms.end(), transforms.begin(), transforms.end());
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::setCsgTreeNode(const CsgTreeNode& csgTreeNode, int nodeIndex)
+void Scene<DIM>::setCsgTreeNode(const CsgTreeNode& csgTreeNode, int nodeIndex)
 {
     sceneData->csgTree[nodeIndex] = csgTreeNode;
 }
@@ -339,7 +426,7 @@ inline int assignEdgeIndices(const std::vector<Triangle>& triangles, PolygonSoup
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::computeSilhouettes(const std::function<bool(float, int)>& ignoreSilhouette)
+void Scene<DIM>::computeSilhouettes(const std::function<bool(float, int)>& ignoreSilhouette)
 {
     std::cerr << "computeSilhouettes(): DIM: " << DIM << std::endl;
     exit(EXIT_FAILURE);
@@ -434,8 +521,8 @@ inline void Scene<3>::computeSilhouettes(const std::function<bool(float, int)>& 
 }
 
 template<size_t DIM, typename PrimitiveType>
-inline void computeNormals(const std::vector<PrimitiveType>& primitives,
-                           PolygonSoup<DIM>& soup, bool computeWeighted)
+void computeNormals(const std::vector<PrimitiveType>& primitives,
+                    PolygonSoup<DIM>& soup, bool computeWeighted)
 {
     // do nothing
 }
@@ -491,7 +578,7 @@ inline void computeNormals<3, Triangle>(const std::vector<Triangle>& triangles,
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::computeObjectNormals(int objectIndex, bool computeWeighted)
+void Scene<DIM>::computeObjectNormals(int objectIndex, bool computeWeighted)
 {
     std::cerr << "computeObjectNormals(): DIM: " << DIM << std::endl;
     exit(EXIT_FAILURE);
@@ -524,9 +611,9 @@ inline void Scene<3>::computeObjectNormals(int objectIndex, bool computeWeighted
 }
 
 template<typename NodeType, typename PrimitiveType>
-inline void sortLineSegmentSoupPositions(const std::vector<NodeType>& flatTree,
-                                         std::vector<PrimitiveType *>& lineSegments,
-                                         PolygonSoup<2>& soup)
+void sortLineSegmentSoupPositions(const std::vector<NodeType>& flatTree,
+                                  std::vector<PrimitiveType *>& lineSegments,
+                                  PolygonSoup<2>& soup)
 {
     int V = (int)soup.positions.size();
     std::vector<Vector2> sortedPositions(V), sortedVertexNormals(V);
@@ -563,9 +650,9 @@ inline void sortLineSegmentSoupPositions(const std::vector<NodeType>& flatTree,
 }
 
 template<typename NodeType, typename PrimitiveType>
-inline void sortTriangleSoupPositions(const std::vector<NodeType>& flatTree,
-                                      std::vector<PrimitiveType *>& triangles,
-                                      PolygonSoup<3>& soup)
+void sortTriangleSoupPositions(const std::vector<NodeType>& flatTree,
+                               std::vector<PrimitiveType *>& triangles,
+                               PolygonSoup<3>& soup)
 {
     int V = (int)soup.positions.size();
     std::vector<Vector3> sortedPositions(V), sortedVertexNormals(V);
@@ -602,10 +689,10 @@ inline void sortTriangleSoupPositions(const std::vector<NodeType>& flatTree,
 }
 
 template<size_t DIM, typename NodeType, typename PrimitiveType, typename SilhouetteType>
-inline void sortSoupPositions(const std::vector<NodeType>& flatTree,
-                              std::vector<PrimitiveType *>& primitives,
-                              std::vector<SilhouetteType *>& silhouettes,
-                              PolygonSoup<DIM>& soup)
+void sortSoupPositions(const std::vector<NodeType>& flatTree,
+                       std::vector<PrimitiveType *>& primitives,
+                       std::vector<SilhouetteType *>& silhouettes,
+                       PolygonSoup<DIM>& soup)
 {
     // do nothing
 }
@@ -678,10 +765,10 @@ template<size_t DIM,
          typename NodeType,
          typename LeafNodeType,
          typename SilhouetteLeafNodeType>
-inline std::unique_ptr<Aggregate<DIM>> makeVectorizedAggregate(std::vector<PrimitiveType *>& primitives,
-                                                               std::vector<SilhouetteType *>& silhouettes,
-                                                               const Bvh<DIM, BvhNodeType, PrimitiveType, SilhouetteType> *bvh,
-                                                               bool printStats)
+std::unique_ptr<Aggregate<DIM>> makeVectorizedAggregate(std::vector<PrimitiveType *>& primitives,
+                                                        std::vector<SilhouetteType *>& silhouettes,
+                                                        const Bvh<DIM, BvhNodeType, PrimitiveType, SilhouetteType> *bvh,
+                                                        bool printStats)
 {
     using MbvhType = Mbvh<FCPW_SIMD_WIDTH, DIM,
                           PrimitiveType,
@@ -711,12 +798,12 @@ template<size_t DIM,
          typename PrimitiveType,
          typename SilhouetteType,
          typename VectorizedNodeType>
-inline std::unique_ptr<Aggregate<DIM>> makeAggregate(const AggregateType& aggregateType,
-                                                     std::vector<PrimitiveType *>& primitives,
-                                                     std::vector<SilhouetteType *>& silhouettes,
-                                                     bool vectorize, bool printStats,
-                                                     SortPositionsFunc<DIM, NodeType, PrimitiveType, SilhouetteType> sortPositions={},
-                                                     const std::function<bool(float, int)>& ignoreSilhouette={})
+std::unique_ptr<Aggregate<DIM>> makeAggregate(const AggregateType& aggregateType,
+                                              std::vector<PrimitiveType *>& primitives,
+                                              std::vector<SilhouetteType *>& silhouettes,
+                                              bool vectorize, bool printStats,
+                                              SortPositionsFunc<DIM, NodeType, PrimitiveType, SilhouetteType> sortPositions={},
+                                              const std::function<bool(float, int)>& ignoreSilhouette={})
 {
     using namespace std::chrono;
     high_resolution_clock::time_point t1 = high_resolution_clock::now();
@@ -780,10 +867,10 @@ inline std::unique_ptr<Aggregate<DIM>> makeAggregate(const AggregateType& aggreg
 }
 
 template<size_t DIM>
-inline void buildGeometricAggregates(const AggregateType& aggregateType, bool vectorize, bool printStats,
-                                     const std::function<bool(float, int)>& ignoreSilhouette,
-                                     std::unique_ptr<SceneData<DIM>>& sceneData,
-                                     std::vector<std::unique_ptr<Aggregate<DIM>>>& objectAggregates)
+void buildGeometricAggregates(const AggregateType& aggregateType, bool vectorize, bool printStats,
+                              const std::function<bool(float, int)>& ignoreSilhouette,
+                              std::unique_ptr<SceneData<DIM>>& sceneData,
+                              std::vector<std::unique_ptr<Aggregate<DIM>>>& objectAggregates)
 {
     std::cerr << "buildGeometricAggregates(): DIM: " << DIM << std::endl;
     exit(EXIT_FAILURE);
@@ -934,10 +1021,9 @@ inline void buildGeometricAggregates<3>(const AggregateType& aggregateType, bool
 }
 
 template<size_t DIM>
-inline std::unique_ptr<Aggregate<DIM>> buildCsgAggregateRecursive(
-                                        int nodeIndex, std::unordered_map<int, CsgTreeNode>& csgTree,
-                                        std::vector<std::unique_ptr<Aggregate<DIM>>>& aggregateInstances,
-                                        int& nAggregates)
+std::unique_ptr<Aggregate<DIM>> buildCsgAggregateRecursive(int nodeIndex, std::unordered_map<int, CsgTreeNode>& csgTree,
+                                                           std::vector<std::unique_ptr<Aggregate<DIM>>>& aggregateInstances,
+                                                           int& nAggregates)
 {
     const CsgTreeNode& node = csgTree[nodeIndex];
     std::unique_ptr<Aggregate<DIM>> instance1 = nullptr;
@@ -964,8 +1050,8 @@ inline std::unique_ptr<Aggregate<DIM>> buildCsgAggregateRecursive(
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::build(const AggregateType& aggregateType, bool vectorize,
-                              bool printStats, bool reduceMemoryFootprint)
+void Scene<DIM>::build(const AggregateType& aggregateType, bool vectorize,
+                       bool printStats, bool reduceMemoryFootprint)
 {
     // clear old aggregate data
     sceneData->clearAggregateData();
@@ -1040,14 +1126,15 @@ inline void Scene<DIM>::build(const AggregateType& aggregateType, bool vectorize
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::updateObjectVertex(const Vector<DIM>& position, int vertexIndex, int objectIndex)
+void Scene<DIM>::updateObjectVertex(const Vector<DIM>& position, int vertexIndex, int objectIndex)
 {
     PolygonSoup<DIM>& soup = sceneData->soups[objectIndex];
-    soup.positions[soup.indexMap[vertexIndex]] = position;
+    int positionIndex = soup.indexMap.empty() ? vertexIndex : soup.indexMap[vertexIndex];
+    soup.positions[positionIndex] = position;
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::updateObjectVertices(const std::vector<Vector<DIM>>& positions, int objectIndex)
+void Scene<DIM>::updateObjectVertices(const std::vector<Vector<DIM>>& positions, int objectIndex)
 {
     int nVertices = (int)positions.size();
     for (int i = 0; i < nVertices; i++) {
@@ -1056,7 +1143,7 @@ inline void Scene<DIM>::updateObjectVertices(const std::vector<Vector<DIM>>& pos
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::refit(bool printStats)
+void Scene<DIM>::refit(bool printStats)
 {
     using namespace std::chrono;
     high_resolution_clock::time_point t1 = high_resolution_clock::now();
@@ -1071,57 +1158,63 @@ inline void Scene<DIM>::refit(bool printStats)
 }
 
 template<size_t DIM>
-inline bool Scene<DIM>::intersect(Ray<DIM>& r, Interaction<DIM>& i, bool checkForOcclusion) const
+bool Scene<DIM>::intersect(Ray<DIM>& r, Interaction<DIM>& i, bool checkForOcclusion) const
 {
     return sceneData->aggregate->intersect(r, i, checkForOcclusion);
 }
 
 template<size_t DIM>
-inline int Scene<DIM>::intersect(Ray<DIM>& r, std::vector<Interaction<DIM>>& is,
-                                 bool checkForOcclusion, bool recordAllHits) const
+bool Scene<DIM>::intersectRobust(Ray<DIM>& r, Interaction<DIM>& i) const
+{
+    return sceneData->aggregate->intersectRobust(r, i);
+}
+
+template<size_t DIM>
+int Scene<DIM>::intersect(Ray<DIM>& r, std::vector<Interaction<DIM>>& is,
+                          bool checkForOcclusion, bool recordAllHits) const
 {
     return sceneData->aggregate->intersect(r, is, checkForOcclusion, recordAllHits);
 }
 
 template<size_t DIM>
-inline int Scene<DIM>::intersect(const BoundingSphere<DIM>& s, std::vector<Interaction<DIM>>& is,
-                                 bool recordOneHit) const
+int Scene<DIM>::intersect(const BoundingSphere<DIM>& s, std::vector<Interaction<DIM>>& is,
+                          bool recordOneHit) const
 {
     return sceneData->aggregate->intersect(s, is, recordOneHit);
 }
 
 template<size_t DIM>
-inline int Scene<DIM>::intersect(const BoundingSphere<DIM>& s,
-                                 Interaction<DIM>& i, const Vector<DIM>& randNums,
-                                 const std::function<float(float)>& branchTraversalWeight) const
+int Scene<DIM>::intersect(const BoundingSphere<DIM>& s,
+                          Interaction<DIM>& i, const Vector<DIM>& randNums,
+                          const std::function<float(float)>& branchTraversalWeight) const
 {
     return sceneData->aggregate->intersect(s, i, randNums, branchTraversalWeight);
 }
 
 template<size_t DIM>
-inline bool Scene<DIM>::contains(const Vector<DIM>& x) const
+bool Scene<DIM>::contains(const Vector<DIM>& x) const
 {
     return sceneData->aggregate->contains(x);
 }
 
 template<size_t DIM>
-inline bool Scene<DIM>::hasLineOfSight(const Vector<DIM>& xi, const Vector<DIM>& xj) const
+bool Scene<DIM>::hasLineOfSight(const Vector<DIM>& xi, const Vector<DIM>& xj) const
 {
     return sceneData->aggregate->hasLineOfSight(xi, xj);
 }
 
 template<size_t DIM>
-inline bool Scene<DIM>::findClosestPoint(const Vector<DIM>& x, Interaction<DIM>& i,
-                                         float squaredRadius, bool recordNormal) const
+bool Scene<DIM>::findClosestPoint(const Vector<DIM>& x, Interaction<DIM>& i,
+                                  float squaredRadius, bool recordNormal) const
 {
     BoundingSphere<DIM> s(x, squaredRadius);
     return sceneData->aggregate->findClosestPoint(s, i, recordNormal);
 }
 
 template<size_t DIM>
-inline bool Scene<DIM>::findClosestSilhouettePoint(const Vector<DIM>& x, Interaction<DIM>& i,
-                                                   bool flipNormalOrientation, float squaredMinRadius,
-                                                   float squaredMaxRadius, float precision, bool recordNormal) const
+bool Scene<DIM>::findClosestSilhouettePoint(const Vector<DIM>& x, Interaction<DIM>& i,
+                                            bool flipNormalOrientation, float squaredMinRadius,
+                                            float squaredMaxRadius, float precision, bool recordNormal) const
 {
     BoundingSphere<DIM> s(x, squaredMaxRadius);
     return sceneData->aggregate->findClosestSilhouettePoint(s, i, flipNormalOrientation, squaredMinRadius,
@@ -1129,9 +1222,42 @@ inline bool Scene<DIM>::findClosestSilhouettePoint(const Vector<DIM>& x, Interac
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::intersect(std::vector<Ray<DIM>>& rays,
-                                  std::vector<Interaction<DIM>>& interactions,
-                                  bool checkForOcclusion) const
+void Scene<DIM>::intersect(const Eigen::MatrixXf& rayOrigins,
+                           const Eigen::MatrixXf& rayDirections,
+                           const Eigen::VectorXf& rayDistanceBounds,
+                           std::vector<Interaction<DIM>>& interactions,
+                           bool checkForOcclusion) const
+{
+    int nQueries = (int)rayOrigins.rows();
+    interactions.clear();
+    interactions.resize(nQueries);
+
+    auto callback = [&](int start, int end) {
+        for (int i = start; i < end; i++) {
+            Ray<DIM> ray(rayOrigins.row(i), rayDirections.row(i), rayDistanceBounds(i));
+            sceneData->aggregate->intersect(ray, interactions[i], checkForOcclusion);
+        }
+    };
+
+    int nThreads = std::thread::hardware_concurrency();
+    int nQueriesPerThread = nQueries/nThreads;
+    std::vector<std::thread> threads;
+
+    for (int i = 0; i < nThreads; i++) {
+        int start = i*nQueriesPerThread;
+        int end = (i == nThreads - 1) ? nQueries : (i + 1)*nQueriesPerThread;
+        threads.emplace_back(callback, start, end);
+    }
+
+    for (auto& t: threads) {
+        t.join();
+    }
+}
+
+template<size_t DIM>
+void Scene<DIM>::intersect(std::vector<Ray<DIM>>& rays,
+                           std::vector<Interaction<DIM>>& interactions,
+                           bool checkForOcclusion) const
 {
     int nQueries = (int)rays.size();
     interactions.clear();
@@ -1159,10 +1285,105 @@ inline void Scene<DIM>::intersect(std::vector<Ray<DIM>>& rays,
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::intersect(const std::vector<BoundingSphere<DIM>>& boundingSpheres,
-                                  std::vector<Interaction<DIM>>& interactions,
-                                  const std::vector<Vector<DIM>>& randNums,
-                                  const std::function<float(float)>& branchTraversalWeight) const
+void Scene<DIM>::intersectRobust(const Eigen::MatrixXf& rayOrigins,
+                                 const Eigen::MatrixXf& rayDirections,
+                                 const Eigen::VectorXf& rayDistanceBounds,
+                                 std::vector<Interaction<DIM>>& interactions) const
+{
+    int nQueries = (int)rayOrigins.rows();
+    interactions.clear();
+    interactions.resize(nQueries);
+
+    auto callback = [&](int start, int end) {
+        for (int i = start; i < end; i++) {
+            Ray<DIM> ray(rayOrigins.row(i), rayDirections.row(i), rayDistanceBounds(i));
+            sceneData->aggregate->intersectRobust(ray, interactions[i]);
+        }
+    };
+
+    int nThreads = std::thread::hardware_concurrency();
+    int nQueriesPerThread = nQueries/nThreads;
+    std::vector<std::thread> threads;
+
+    for (int i = 0; i < nThreads; i++) {
+        int start = i*nQueriesPerThread;
+        int end = (i == nThreads - 1) ? nQueries : (i + 1)*nQueriesPerThread;
+        threads.emplace_back(callback, start, end);
+    }
+
+    for (auto& t: threads) {
+        t.join();
+    }
+}
+
+template<size_t DIM>
+void Scene<DIM>::intersectRobust(std::vector<Ray<DIM>>& rays,
+                                 std::vector<Interaction<DIM>>& interactions) const
+{
+    int nQueries = (int)rays.size();
+    interactions.clear();
+    interactions.resize(nQueries);
+
+    auto callback = [&](int start, int end) {
+        for (int i = start; i < end; i++) {
+            sceneData->aggregate->intersectRobust(rays[i], interactions[i]);
+        }
+    };
+
+    int nThreads = std::thread::hardware_concurrency();
+    int nQueriesPerThread = nQueries/nThreads;
+    std::vector<std::thread> threads;
+
+    for (int i = 0; i < nThreads; i++) {
+        int start = i*nQueriesPerThread;
+        int end = (i == nThreads - 1) ? nQueries : (i + 1)*nQueriesPerThread;
+        threads.emplace_back(callback, start, end);
+    }
+
+    for (auto& t: threads) {
+        t.join();
+    }
+}
+
+template<size_t DIM>
+void Scene<DIM>::intersect(const Eigen::MatrixXf& sphereCenters,
+                           const Eigen::VectorXf& sphereSquaredRadii,
+                           std::vector<Interaction<DIM>>& interactions,
+                           const Eigen::MatrixXf& randNums,
+                           const std::function<float(float)>& branchTraversalWeight) const
+{
+    int nQueries = (int)sphereCenters.rows();
+    interactions.clear();
+    interactions.resize(nQueries);
+
+    auto callback = [&](int start, int end) {
+        for (int i = start; i < end; i++) {
+            BoundingSphere<DIM> boundingSphere(sphereCenters.row(i), sphereSquaredRadii(i));
+            sceneData->aggregate->intersect(boundingSphere, interactions[i],
+                                            randNums.row(i), branchTraversalWeight);
+        }
+    };
+
+    int nThreads = std::thread::hardware_concurrency();
+    int nQueriesPerThread = nQueries/nThreads;
+    std::vector<std::thread> threads;
+
+    for (int i = 0; i < nThreads; i++) {
+        int start = i*nQueriesPerThread;
+        int end = (i == nThreads - 1) ? nQueries : (i + 1)*nQueriesPerThread;
+        threads.emplace_back(callback, start, end);
+    }
+
+    for (auto& t: threads) {
+        t.join();
+    }
+}
+
+template<size_t DIM>
+void Scene<DIM>::intersect(const std::vector<BoundingSphere<DIM>>& boundingSpheres,
+                           std::vector<Interaction<DIM>>& interactions,
+                           const std::vector<Vector<DIM>>& randNums,
+                           const std::function<float(float)>& branchTraversalWeight) const
 {
     int nQueries = (int)boundingSpheres.size();
     interactions.clear();
@@ -1191,8 +1412,36 @@ inline void Scene<DIM>::intersect(const std::vector<BoundingSphere<DIM>>& boundi
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::contains(const std::vector<Vector<DIM>>& points,
-                                 std::vector<uint32_t>& result) const
+void Scene<DIM>::contains(const Eigen::MatrixXf& points,
+                          Eigen::VectorXi& result) const
+{
+    int nQueries = (int)points.rows();
+    result = Eigen::VectorXi::Zero(nQueries);
+
+    auto callback = [&](int start, int end) {
+        for (int i = start; i < end; i++) {
+            result(i) = sceneData->aggregate->contains(points.row(i)) ? 1 : 0;
+        }
+    };
+
+    int nThreads = std::thread::hardware_concurrency();
+    int nQueriesPerThread = nQueries/nThreads;
+    std::vector<std::thread> threads;
+
+    for (int i = 0; i < nThreads; i++) {
+        int start = i*nQueriesPerThread;
+        int end = (i == nThreads - 1) ? nQueries : (i + 1)*nQueriesPerThread;
+        threads.emplace_back(callback, start, end);
+    }
+
+    for (auto& t: threads) {
+        t.join();
+    }
+}
+
+template<size_t DIM>
+void Scene<DIM>::contains(const std::vector<Vector<DIM>>& points,
+                          std::vector<uint32_t>& result) const
 {
     int nQueries = (int)points.size();
     result.clear();
@@ -1220,9 +1469,38 @@ inline void Scene<DIM>::contains(const std::vector<Vector<DIM>>& points,
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::hasLineOfSight(const std::vector<Vector<DIM>>& pointsI,
-                                       const std::vector<Vector<DIM>>& pointsJ,
-                                       std::vector<uint32_t>& result) const
+void Scene<DIM>::hasLineOfSight(const Eigen::MatrixXf& pointsI,
+                                const Eigen::MatrixXf& pointsJ,
+                                Eigen::VectorXi& result) const
+{
+    int nQueries = (int)pointsI.rows();
+    result = Eigen::VectorXi::Zero(nQueries);
+
+    auto callback = [&](int start, int end) {
+        for (int i = start; i < end; i++) {
+            result(i) = sceneData->aggregate->hasLineOfSight(pointsI.row(i), pointsJ.row(i)) ? 1 : 0;
+        }
+    };
+
+    int nThreads = std::thread::hardware_concurrency();
+    int nQueriesPerThread = nQueries/nThreads;
+    std::vector<std::thread> threads;
+
+    for (int i = 0; i < nThreads; i++) {
+        int start = i*nQueriesPerThread;
+        int end = (i == nThreads - 1) ? nQueries : (i + 1)*nQueriesPerThread;
+        threads.emplace_back(callback, start, end);
+    }
+
+    for (auto& t: threads) {
+        t.join();
+    }
+}
+
+template<size_t DIM>
+void Scene<DIM>::hasLineOfSight(const std::vector<Vector<DIM>>& pointsI,
+                                const std::vector<Vector<DIM>>& pointsJ,
+                                std::vector<uint32_t>& result) const
 {
     int nQueries = (int)pointsI.size();
     result.clear();
@@ -1250,9 +1528,41 @@ inline void Scene<DIM>::hasLineOfSight(const std::vector<Vector<DIM>>& pointsI,
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::findClosestPoints(std::vector<BoundingSphere<DIM>>& boundingSpheres,
-                                          std::vector<Interaction<DIM>>& interactions,
-                                          bool recordNormal) const
+void Scene<DIM>::findClosestPoints(const Eigen::MatrixXf& queryPoints,
+                                   const Eigen::VectorXf& squaredMaxRadii,
+                                   std::vector<Interaction<DIM>>& interactions,
+                                   bool recordNormal) const
+{
+    int nQueries = (int)queryPoints.rows();
+    interactions.clear();
+    interactions.resize(nQueries);
+
+    auto callback = [&](int start, int end) {
+        for (int i = start; i < end; i++) {
+            BoundingSphere<DIM> boundingSphere(queryPoints.row(i), squaredMaxRadii(i));
+            sceneData->aggregate->findClosestPoint(boundingSphere, interactions[i], recordNormal);
+        }
+    };
+
+    int nThreads = std::thread::hardware_concurrency();
+    int nQueriesPerThread = nQueries/nThreads;
+    std::vector<std::thread> threads;
+
+    for (int i = 0; i < nThreads; i++) {
+        int start = i*nQueriesPerThread;
+        int end = (i == nThreads - 1) ? nQueries : (i + 1)*nQueriesPerThread;
+        threads.emplace_back(callback, start, end);
+    }
+
+    for (auto& t: threads) {
+        t.join();
+    }
+}
+
+template<size_t DIM>
+void Scene<DIM>::findClosestPoints(std::vector<BoundingSphere<DIM>>& boundingSpheres,
+                                   std::vector<Interaction<DIM>>& interactions,
+                                   bool recordNormal) const
 {
     int nQueries = (int)boundingSpheres.size();
     interactions.clear();
@@ -1280,11 +1590,47 @@ inline void Scene<DIM>::findClosestPoints(std::vector<BoundingSphere<DIM>>& boun
 }
 
 template<size_t DIM>
-inline void Scene<DIM>::findClosestSilhouettePoints(std::vector<BoundingSphere<DIM>>& boundingSpheres,
-                                                    std::vector<Interaction<DIM>>& interactions,
-                                                    const std::vector<uint32_t>& flipNormalOrientation,
-                                                    float squaredMinRadius, float precision,
-                                                    bool recordNormal) const
+void Scene<DIM>::findClosestSilhouettePoints(const Eigen::MatrixXf& queryPoints,
+                                             const Eigen::VectorXf& squaredMaxRadii,
+                                             std::vector<Interaction<DIM>>& interactions,
+                                             const Eigen::VectorXi& flipNormalOrientation,
+                                             float squaredMinRadius, float precision,
+                                             bool recordNormal) const
+{
+    int nQueries = (int)queryPoints.rows();
+    interactions.clear();
+    interactions.resize(nQueries);
+
+    auto callback = [&](int start, int end) {
+        for (int i = start; i < end; i++) {
+            BoundingSphere<DIM> boundingSphere(queryPoints.row(i), squaredMaxRadii(i));
+            sceneData->aggregate->findClosestSilhouettePoint(boundingSphere, interactions[i],
+                                                             flipNormalOrientation(i) == 1,
+                                                             squaredMinRadius, precision, recordNormal);
+        }
+    };
+
+    int nThreads = std::thread::hardware_concurrency();
+    int nQueriesPerThread = nQueries/nThreads;
+    std::vector<std::thread> threads;
+
+    for (int i = 0; i < nThreads; i++) {
+        int start = i*nQueriesPerThread;
+        int end = (i == nThreads - 1) ? nQueries : (i + 1)*nQueriesPerThread;
+        threads.emplace_back(callback, start, end);
+    }
+
+    for (auto& t: threads) {
+        t.join();
+    }
+}
+
+template<size_t DIM>
+void Scene<DIM>::findClosestSilhouettePoints(std::vector<BoundingSphere<DIM>>& boundingSpheres,
+                                             std::vector<Interaction<DIM>>& interactions,
+                                             const std::vector<uint32_t>& flipNormalOrientation,
+                                             float squaredMinRadius, float precision,
+                                             bool recordNormal) const
 {
     int nQueries = (int)boundingSpheres.size();
     interactions.clear();
@@ -1314,7 +1660,7 @@ inline void Scene<DIM>::findClosestSilhouettePoints(std::vector<BoundingSphere<D
 }
 
 template<size_t DIM>
-inline SceneData<DIM>* Scene<DIM>::getSceneData()
+SceneData<DIM>* Scene<DIM>::getSceneData()
 {
     return sceneData.get();
 }
