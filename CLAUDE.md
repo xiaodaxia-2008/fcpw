@@ -327,7 +327,7 @@ BVH construction logic is in `include/fcpw/aggregates/bvh.inl`:
 - Cannot transfer vectorized (MBVH) to GPU
 
 **Dependencies:**
-- Eigen is always required (submodule in `deps/eigen/`)
+- Eigen is always required as an external CMake package (`find_package(Eigen3 CONFIG REQUIRED)`); it is no longer vendored as a submodule
 - Enoki is optional but recommended (vendored in `deps/enoki/`)
   - **Vendored, not a submodule**: Enoki is archived and no longer maintained
   - CMakeLists.txt patched to require CMake 3.5+ (was 2.8.12) for modern CMake compatibility

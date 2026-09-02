@@ -153,14 +153,13 @@ The C++ demo can be run from the `build` directory with the command:
 ./demos/demo [--useGpu]
 ```
 
-For CPU vectorization, Enoki is included by default. It can be disabled with the command `-DFCPW_USE_ENOKI=OFF`, in which case *FCPW* falls back to [Eigen](http://eigen.tuxfamily.org/index.php?title=Main_Page) for non-vectorized CPU queries.
+For CPU vectorization, Enoki is included by default. It can be disabled with the command `-DFCPW_USE_ENOKI=OFF`, in which case *FCPW* falls back to [Eigen](http://eigen.tuxfamily.org/index.php?title=Main_Page) for non-vectorized CPU queries. Eigen3 must be installed as a CMake package and discoverable by `find_package(Eigen3 CONFIG REQUIRED)`. It is no longer bundled as a submodule.
 
 To include *FCPW* in your project without GPU support, add the following lines to your CMakeLists.txt file:
 
 ```
 add_subdirectory(fcpw)
 target_link_libraries(YOUR_TARGET fcpw)
-target_include_directories(YOUR_TARGET PRIVATE ${FCPW_EIGEN_INCLUDES})
 target_include_directories(YOUR_TARGET PRIVATE ${FCPW_ENOKI_INCLUDES})
 ```
 

@@ -35,12 +35,7 @@ endif()
 # add dependencies
 get_directory_property(hasParent PARENT_DIRECTORY)
 
-if(hasParent)
-    set(FCPW_EIGEN_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/eigen PARENT_SCOPE)
-else()
-    set(FCPW_EIGEN_INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/deps/eigen)
-endif()
-list(APPEND FCPW_DEPS_INCLUDES ${FCPW_EIGEN_INCLUDES})
+# Eigen is provided as an external CMake package (see find_package below).
 
 if(FCPW_ENABLE_GPU_SUPPORT)
     set(SLANG_RHI_INSTALL             OFF CACHE BOOL " " FORCE)
